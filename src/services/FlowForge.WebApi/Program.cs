@@ -19,6 +19,13 @@ builder.Services.AddScoped<IJobService, JobService>();
 // Add Controllers
 builder.Services.AddControllers();
 
+// Add Swagger
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new() { Title = "FlowForge Web API", Version = "v1" });
+});
+
 // Add FluentValidation
 builder.Services.AddFluentValidationAutoValidation();
 builder.Services.AddValidatorsFromAssemblyContaining<CreateAutomationRequestValidator>();
@@ -41,6 +48,16 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 // Middleware
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "FlowForge Web API v1");
+        c.RoutePrefix = "swagger";
+    });
+}
+
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseCors();
 app.MapControllers();
