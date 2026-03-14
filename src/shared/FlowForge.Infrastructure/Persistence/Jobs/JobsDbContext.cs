@@ -9,6 +9,8 @@ public class JobsDbContext(DbContextOptions<JobsDbContext> options) : DbContext(
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.ApplyConfigurationsFromAssembly(typeof(JobsDbContext).Assembly);
+        modelBuilder.ApplyConfigurationsFromAssembly(
+            typeof(JobsDbContext).Assembly,
+            t => t.Namespace?.Contains("Persistence.Jobs.Configurations") ?? false);
     }
 }

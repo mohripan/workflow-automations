@@ -12,6 +12,8 @@ public class PlatformDbContext(DbContextOptions<PlatformDbContext> options) : Db
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.ApplyConfigurationsFromAssembly(typeof(PlatformDbContext).Assembly);
+        modelBuilder.ApplyConfigurationsFromAssembly(
+            typeof(PlatformDbContext).Assembly,
+            t => t.Namespace?.Contains("Persistence.Platform.Configurations") ?? false);
     }
 }

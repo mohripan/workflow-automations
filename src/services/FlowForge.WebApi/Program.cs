@@ -47,6 +47,12 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+// Programmatic Migration
+using (var scope = app.Services.CreateScope())
+{
+    await FlowForge.Infrastructure.Persistence.DatabaseInitializer.InitializeDatabasesAsync(scope.ServiceProvider);
+}
+
 // Middleware
 if (app.Environment.IsDevelopment())
 {

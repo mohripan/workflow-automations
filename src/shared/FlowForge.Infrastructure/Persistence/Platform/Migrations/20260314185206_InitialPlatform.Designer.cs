@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace FlowForge.Infrastructure.Persistence.Platform.Migrations
 {
     [DbContext(typeof(PlatformDbContext))]
-    [Migration("20260314183039_InitialPlatform")]
+    [Migration("20260314185206_InitialPlatform")]
     partial class InitialPlatform
     {
         /// <inheritdoc />
@@ -92,50 +92,6 @@ namespace FlowForge.Infrastructure.Persistence.Platform.Migrations
                         .IsUnique();
 
                     b.ToTable("HostGroups");
-                });
-
-            modelBuilder.Entity("FlowForge.Domain.Entities.Job", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AutomationId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("HostGroupId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid?>("HostId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Message")
-                        .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)");
-
-                    b.Property<string>("ParametersJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("TaskId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset?>("TriggeredAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("Job");
                 });
 
             modelBuilder.Entity("FlowForge.Domain.Entities.Trigger", b =>
