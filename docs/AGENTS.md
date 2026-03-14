@@ -2,7 +2,7 @@
 
 ## What Is This Project?
 
-FlowForge is a **workflow orchestration system** built from scratch in .NET 10. The goal is to learn and improve upon a legacy system by applying modern architecture patterns: event-driven communication, clean domain separation, and cloud-native deployment via Docker/Kubernetes.
+FlowForge is a **workflow orchestration system** built from scratch in .NET 8. The goal is to learn and improve upon a legacy system by applying modern architecture patterns: event-driven communication, clean domain separation, and cloud-native deployment via Docker/Kubernetes.
 
 The system allows users to define **Automations** — combinations of triggers and conditions — that automatically create and dispatch **Jobs** to distributed worker hosts for execution.
 
