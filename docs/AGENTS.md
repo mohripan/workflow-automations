@@ -106,6 +106,7 @@ See **SPECS.md** for the full solution/project structure.
 See **CONVENTIONS.md** for coding standards, DDD rules, and shared patterns.
 
 Per-service deep dives:
+- **WEBAPI.md** — REST endpoints, background consumers, SignalR hub, webhook flow
 - **JOBAUTOMATOR.md** — trigger evaluation, condition trees, scheduler
 - **JOBORCHESTRATOR.md** — job dispatching, load balancing, heartbeat monitoring
 - **WORKFLOWHOST.md** — process management, job consumption, host registration
