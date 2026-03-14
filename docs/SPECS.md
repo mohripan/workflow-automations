@@ -34,11 +34,11 @@ FlowForge/
 │   │   │
 │   │   ├── FlowForge.Domain/                        # Pure domain — zero external deps
 │   │   │   ├── Entities/
-│   │   │   │   ├── Automation.cs                    # Automation definition
-│   │   │   │   ├── Job.cs                           # Job instance
+│   │   │   │   ├── Automation.cs                    # Automation definition (has TaskId)
+│   │   │   │   ├── Job.cs                           # Job instance (has TaskId + ConnectionId)
 │   │   │   │   ├── Trigger.cs                       # Trigger configuration
 │   │   │   │   ├── WorkflowHost.cs                  # Host registration record
-│   │   │   │   └── HostGroup.cs                     # Group of hosts
+│   │   │   │   └── HostGroup.cs                     # Group of hosts (has ConnectionId)
 │   │   │   ├── Enums/
 │   │   │   │   ├── JobStatus.cs
 │   │   │   │   ├── TriggerType.cs                   # Schedule | Sql | JobCompleted | Webhook
@@ -48,28 +48,34 @@ FlowForge/
 │   │   │   ├── Exceptions/
 │   │   │   │   ├── DomainException.cs
 │   │   │   │   ├── JobNotFoundException.cs
-│   │   │   │   └── AutomationNotFoundException.cs
+│   │   │   │   ├── AutomationNotFoundException.cs
+│   │   │   │   └── UnknownConnectionIdException.cs
 │   │   │   └── FlowForge.Domain.csproj              # No external NuGet deps
 │   │   │
 │   │   ├── FlowForge.Contracts/                     # Redis Stream message schemas
 │   │   │   ├── Events/
 │   │   │   │   ├── AutomationTriggeredEvent.cs      # JobAutomator → WebApi
-│   │   │   │   ├── JobCreatedEvent.cs               # WebApi → JobOrchestrator
+│   │   │   │   ├── JobCreatedEvent.cs               # WebApi → JobOrchestrator (has ConnectionId)
 │   │   │   │   ├── JobAssignedEvent.cs              # JobOrchestrator → WorkflowHost
-│   │   │   │   ├── JobStatusChangedEvent.cs         # WorkflowEngine → WebApi
+│   │   │   │   ├── JobStatusChangedEvent.cs         # WorkflowEngine → WebApi (has ConnectionId)
 │   │   │   │   └── JobCancelRequestedEvent.cs       # WebApi → WorkflowHost
 │   │   │   └── FlowForge.Contracts.csproj           # DTO only — minimal deps
 │   │   │
 │   │   └── FlowForge.Infrastructure/                # Shared infra implementations
 │   │       ├── Persistence/
-│   │       │   ├── FlowForgeDbContext.cs
-│   │       │   ├── Migrations/
-│   │       │   └── Configurations/                  # EF Core Fluent API
-│   │       │       ├── AutomationConfiguration.cs
-│   │       │       ├── JobConfiguration.cs
-│   │       │       ├── TriggerConfiguration.cs
-│   │       │       ├── WorkflowHostConfiguration.cs
-│   │       │       └── HostGroupConfiguration.cs
+│   │       │   ├── Platform/                        # Platform DB: Automations, HostGroups
+│   │       │   │   ├── PlatformDbContext.cs
+│   │       │   │   ├── Migrations/
+│   │       │   │   └── Configurations/
+│   │       │   │       ├── AutomationConfiguration.cs
+│   │       │   │       ├── TriggerConfiguration.cs
+│   │       │   │       ├── WorkflowHostConfiguration.cs
+│   │       │   │       └── HostGroupConfiguration.cs
+│   │       │   └── Jobs/                            # Per-host-group DB: Jobs only
+│   │       │       ├── JobsDbContext.cs
+│   │       │       ├── Migrations/
+│   │       │       └── Configurations/
+│   │       │           └── JobConfiguration.cs
 │   │       ├── Messaging/
 │   │       │   ├── Abstractions/
 │   │       │   │   ├── IMessagePublisher.cs
@@ -82,9 +88,12 @@ FlowForge/
 │   │       │   ├── IRedisService.cs
 │   │       │   └── RedisService.cs                  # Heartbeat TTL, scalars, cache
 │   │       ├── Repositories/
-│   │       │   ├── IJobRepository.cs
+│   │       │   ├── IJobRepository.cs                # Resolved by ConnectionId at runtime
 │   │       │   ├── IAutomationRepository.cs
 │   │       │   └── IHostGroupRepository.cs
+│   │       ├── MultiDb/
+│   │       │   ├── JobsDbContextFactory.cs          # Creates JobsDbContext per ConnectionId
+│   │       │   └── ConnectionRegistry.cs            # Maps ConnectionId → connection string + provider
 │   │       ├── ServiceCollectionExtensions.cs       # AddInfrastructure(IConfiguration)
 │   │       └── FlowForge.Infrastructure.csproj
 │   │
@@ -93,7 +102,7 @@ FlowForge/
 │       ├── FlowForge.WebApi/
 │       │   ├── Controllers/
 │       │   │   ├── AutomationsController.cs
-│       │   │   ├── JobsController.cs
+│       │   │   ├── JobsController.cs                # Route: /api/{connectionId}/jobs
 │       │   │   ├── TriggersController.cs
 │       │   │   └── HostGroupsController.cs
 │       │   ├── Hubs/
@@ -152,12 +161,15 @@ FlowForge/
 │       │   └── FlowForge.WorkflowHost.csproj
 │       │
 │       └── FlowForge.WorkflowEngine/
-│           ├── Activities/
-│           │   ├── IActivity.cs
-│           │   ├── ActivityContext.cs               # Input/output bag per activity
-│           │   ├── SendEmailActivity.cs
-│           │   ├── RunScriptActivity.cs             # Python/shell runner
-│           │   └── HttpRequestActivity.cs
+│           ├── Handlers/
+│           │   ├── IWorkflowHandler.cs              # Interface all handlers implement
+│           │   ├── WorkflowHandlerRegistry.cs       # Resolves TaskId → IWorkflowHandler
+│           │   ├── WorkflowContext.cs               # Input params + output store
+│           │   ├── WorkflowResult.cs                # Success | Failed | Cancelled
+│           │   ├── Built-in/
+│           │   │   ├── SendEmailHandler.cs          # TaskId: "send-email"
+│           │   │   ├── HttpRequestHandler.cs        # TaskId: "http-request"
+│           │   │   └── RunScriptHandler.cs          # TaskId: "run-script" (Python/JS/shell)
 │           ├── Reporting/
 │           │   ├── IJobReporter.cs
 │           │   └── JobProgressReporter.cs           # Publish status + heartbeat
@@ -256,16 +268,19 @@ FlowForge.WorkflowEngine  → Domain, Contracts, Infrastructure
 ```
 [Trigger fires]
   JobAutomator ──[AutomationTriggeredEvent]──► WebApi
-                                                │ creates Job (DB, status=Pending)
+                                                │ creates Job in host group's DB
+                                                │ (DB selected via ConnectionId)
                                                 │
-  WebApi ──[JobCreatedEvent]──────────────────► JobOrchestrator
+  WebApi ──[JobCreatedEvent + ConnectionId]───► JobOrchestrator
                                                 │ picks host via round-robin
                                                 │ updates Job (status=Started, hostId)
                                                 │
   JobOrchestrator ──[JobAssignedEvent]────────► WorkflowHost (per-host stream)
                                                 │ spawns WorkflowEngine child process
+                                                │ passes JOB_ID + CONNECTION_ID env vars
                                                 │
-  WorkflowEngine ──[JobStatusChangedEvent]────► WebApi (InProgress / Completed / Error)
+  WorkflowEngine ──[JobStatusChangedEvent     ► WebApi (InProgress / Completed / Error)
+                     + ConnectionId]            │ WebApi updates correct host group DB
   WorkflowEngine ──[heartbeat:{jobId} TTL]────► Redis (every 5s, TTL 30s)
 
 [Cancel request]
@@ -274,6 +289,33 @@ FlowForge.WorkflowEngine  → Domain, Contracts, Infrastructure
                                                 │
   WorkflowEngine ──[JobStatusChangedEvent]────► WebApi (status=Cancelled)
 ```
+
+---
+
+## Multi-Database Architecture
+
+Each `HostGroup` has a `ConnectionId` (e.g. `wf-jobs-minion`, `wf-jobs-titan`) that maps to a dedicated database. Jobs are stored in and queried from their host group's database. Automations, HostGroups, and WorkflowHosts are stored in a single **platform database**.
+
+```json
+// appsettings.json (WebApi, JobOrchestrator, WorkflowEngine)
+{
+  "Platform": {
+    "ConnectionString": "Host=postgres;Database=flowforge_platform;..."
+  },
+  "JobConnections": {
+    "wf-jobs-minion": {
+      "ConnectionString": "Host=postgres;Database=flowforge_minion;...",
+      "Provider": "PostgreSQL"
+    },
+    "wf-jobs-titan": {
+      "ConnectionString": "Host=postgres-titan;Database=flowforge_titan;...",
+      "Provider": "PostgreSQL"
+    }
+  }
+}
+```
+
+`ConnectionRegistry` maps a `ConnectionId` string to the correct `JobsDbContext` at runtime. Controllers and consumers resolve `IJobRepository` by `ConnectionId` using .NET Keyed Services — no Service Locator pattern required.
 
 ---
 

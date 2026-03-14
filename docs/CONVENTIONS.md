@@ -146,6 +146,58 @@ public interface IJobRepository
 }
 ```
 
+### Multi-Database Pattern (Keyed Services)
+
+Each `HostGroup` has a `ConnectionId` string (e.g. `wf-jobs-minion`) that maps to a dedicated database. `IJobRepository` is registered once per `ConnectionId` using **.NET Keyed Services** — no Service Locator or manual `IServiceProvider` resolution in business code.
+
+**Registration** (in `AddInfrastructure`):
+
+```csharp
+// Read all job connection configs
+var jobConnections = config.GetSection("JobConnections").Get<Dictionary<string, JobConnectionConfig>>()!;
+
+foreach (var (connectionId, connConfig) in jobConnections)
+{
+    // Build a DbContext options for this connection
+    var optionsBuilder = new DbContextOptionsBuilder<JobsDbContext>();
+    optionsBuilder.UseNpgsql(connConfig.ConnectionString);  // or UseSqlServer, etc.
+    var options = optionsBuilder.Options;
+
+    // Register keyed — one IJobRepository per connectionId
+    services.AddKeyedScoped<IJobRepository>(
+        connectionId,
+        (_, _) => new JobRepository(new JobsDbContext(options)));
+}
+```
+
+**Dynamic resolution** (controllers, workers — where connectionId comes from the request/event):
+
+```csharp
+// JobsController
+[HttpGet("{connectionId}/jobs/{id:guid}")]
+public async Task<IActionResult> GetById(string connectionId, Guid id, CancellationToken ct)
+{
+    var repo = _serviceProvider.GetRequiredKeyedService<IJobRepository>(connectionId);
+    var job  = await repo.GetByIdAsync(id, ct) ?? throw new JobNotFoundException(id);
+    return Ok(JobResponse.From(job));
+}
+```
+
+**Static injection** (when connectionId is known at DI registration time — e.g. a worker dedicated to one group):
+
+```csharp
+// No need for dynamic resolution — just inject the keyed service directly
+builder.Services.AddScoped<IJobService>(sp =>
+    new JobService(sp.GetRequiredKeyedService<IJobRepository>("wf-jobs-minion")));
+```
+
+**`ConnectionId` propagation rule**: `ConnectionId` must be carried in all Redis Stream events that relate to a Job (`JobCreatedEvent`, `JobStatusChangedEvent`). This allows the consumer on the other end to resolve the correct repository without hitting the platform DB for a lookup.
+
+**Adding a new host group** requires only:
+1. A new entry in `appsettings.json` under `JobConnections`
+2. Running EF Core migrations against the new database
+3. No code changes
+
 ### Redis Service (Generic Cache + Heartbeat)
 
 ```csharp

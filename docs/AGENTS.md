@@ -49,11 +49,14 @@ User-defined entity that ties together:
 - One or more **Triggers** (schedule, SQL, job-completed, webhook)
 - **Trigger Conditions** — logical expression using AND/OR and parentheses
 - A **Host Group** — determines which pool of hosts will run the resulting job
+- A **TaskId** — identifies which workflow handler the resulting job will execute
 
 ### Job
 A unit of work created when an Automation's trigger conditions are met.
 - Always belongs to one Automation
+- Carries a `TaskId` (inherited from the Automation) that determines what the job executes
 - Has a `HostGroupId` and (after assignment) a `HostId`
+- Stored in the **database belonging to its Host Group** (see Host Group below)
 - Progresses through a well-defined status lifecycle
 
 ### Job Status Lifecycle
@@ -67,7 +70,26 @@ Pending → Started → InProgress → Completed
 ```
 
 ### Host Group
-A named group of Workflow Host instances. Jobs are dispatched to a specific group and load-balanced across its members via round-robin.
+A named group of Workflow Host instances. Each host group has:
+- Its own **dedicated database** (connection string identified by `ConnectionId`, e.g. `wf-jobs-minion`)
+- A pool of hosts load-balanced via round-robin for job dispatch
+- Jobs are stored in and queried from the host group's own database
+
+This allows host groups to use different database providers, be on separate servers, and scale independently. For example:
+- `minion` group → lightweight jobs → PostgreSQL on a small server
+- `titan` group → long-running jobs → PostgreSQL on a dedicated server
+
+Automations are stored in a single **platform database**, separate from all host group databases, because they are definitions rather than execution data.
+
+### TaskId
+A string identifier on both Automation and Job that determines which **Workflow Handler** executes the job. The Workflow Engine resolves this at runtime via a `WorkflowHandlerRegistry`.
+
+Built-in handler types:
+- `send-email` — sends an email via SMTP/SendGrid
+- `http-request` — makes an outbound HTTP call
+- `run-script` — executes a Python, JavaScript, or shell script (sandboxed)
+
+Custom handlers can be added by implementing `IWorkflowHandler` and registering it, or by using `run-script` with a custom script file — no DLL compilation required.
 
 ---
 
@@ -94,7 +116,10 @@ A named group of Workflow Host instances. Jobs are dispatched to a specific grou
 | Job status updates | Workflow Engine polls Web API | Publish event to stream |
 | Heartbeat | HTTP call to Web API every 5s | Redis key with TTL (no API hop) |
 | Process kill | Windows Job Object only | Abstracted `IProcessManager` (Docker-native + Linux fallback) |
-| Custom triggers | Compile DLL, drop in folder | Webhook trigger + plugin interface |
+| Custom triggers | Compile DLL, drop in folder | Webhook trigger + `run-script` handler |
+| Custom workflows | Compile DLL, reflection on namespace | `IWorkflowHandler` registry + `run-script` |
+| Job storage | Shared database for all jobs | Per-host-group database via `ConnectionId` |
+| DB provider flexibility | Single shared provider | Keyed Services — per-group provider config |
 | Host discovery | SignalR hub connection tracking | Redis-registered host records |
 | Deployment | Windows Server on-prem | Docker + Kubernetes |
 

@@ -27,12 +27,14 @@ The Web API is an **ASP.NET Core 10** application that serves as the central ent
 
 ### Jobs
 
+Jobs are scoped to a `ConnectionId` (e.g. `wf-jobs-minion`) which identifies the host group's database. All job endpoints are prefixed with `{connectionId}`.
+
 | Method | Route | Description |
 |---|---|---|
-| `GET` | `/api/jobs` | List jobs (filterable by status, automationId) |
-| `GET` | `/api/jobs/{id}` | Get single job |
-| `POST` | `/api/jobs/{id}/cancel` | Request cancellation of a running job |
-| `DELETE` | `/api/jobs/{id}` | Remove a pending job (status → Removed) |
+| `GET` | `/api/{connectionId}/jobs` | List jobs (filterable by status, automationId) |
+| `GET` | `/api/{connectionId}/jobs/{id}` | Get single job |
+| `POST` | `/api/{connectionId}/jobs/{id}/cancel` | Request cancellation of a running job |
+| `DELETE` | `/api/{connectionId}/jobs/{id}` | Remove a pending job (status → Removed) |
 
 ### Host Groups
 
@@ -113,34 +115,53 @@ public class AutomationsController(IAutomationService automationService) : Contr
 
 ### JobsController
 
+`JobsController` is prefixed with `{connectionId}`. It resolves the correct `IJobRepository` at runtime using .NET Keyed Services — the `connectionId` route segment determines which database to query.
+
 ```csharp
 [ApiController]
-[Route("api/jobs")]
-public class JobsController(IJobService jobService) : ControllerBase
+[Route("api/{connectionId}/jobs")]
+public class JobsController(IServiceProvider serviceProvider, IJobService jobService) : ControllerBase
 {
+    // Resolves the IJobRepository keyed to the connectionId from the route
+    private IJobRepository GetRepo(string connectionId)
+        => serviceProvider.GetRequiredKeyedService<IJobRepository>(connectionId);
+
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] JobQueryParams query, CancellationToken ct)
-        => Ok(await jobService.GetAllAsync(query, ct));
+    public async Task<IActionResult> GetAll(
+        string connectionId, [FromQuery] JobQueryParams query, CancellationToken ct)
+    {
+        var repo = GetRepo(connectionId);
+        var result = await jobService.GetAllAsync(repo, query, ct);
+        return Ok(result);
+    }
 
     [HttpGet("{id:guid}")]
-    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
-        => Ok(await jobService.GetByIdAsync(id, ct));
+    public async Task<IActionResult> GetById(string connectionId, Guid id, CancellationToken ct)
+    {
+        var repo = GetRepo(connectionId);
+        var job  = await repo.GetByIdAsync(id, ct) ?? throw new JobNotFoundException(id);
+        return Ok(JobResponse.From(job));
+    }
 
     [HttpPost("{id:guid}/cancel")]
-    public async Task<IActionResult> Cancel(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Cancel(string connectionId, Guid id, CancellationToken ct)
     {
-        await jobService.RequestCancelAsync(id, ct);
+        var repo = GetRepo(connectionId);
+        await jobService.RequestCancelAsync(repo, id, ct);
         return Accepted();
     }
 
     [HttpDelete("{id:guid}")]
-    public async Task<IActionResult> Remove(Guid id, CancellationToken ct)
+    public async Task<IActionResult> Remove(string connectionId, Guid id, CancellationToken ct)
     {
-        await jobService.RemoveAsync(id, ct);
+        var repo = GetRepo(connectionId);
+        await jobService.RemoveAsync(repo, id, ct);
         return NoContent();
     }
 }
 ```
+
+> `GetRequiredKeyedService` throws `InvalidOperationException` if the `connectionId` is not registered. `ExceptionHandlingMiddleware` maps this to HTTP 400 with a clear message. Never let it bubble as a 500.
 
 ---
 
@@ -164,13 +185,15 @@ public interface IAutomationService
 
 ### IJobService
 
+`IJobService` receives the already-resolved `IJobRepository` as a parameter — it does not know about `connectionId` directly. This keeps the service layer decoupled from routing concerns.
+
 ```csharp
 public interface IJobService
 {
-    Task<PagedResult<JobResponse>> GetAllAsync(JobQueryParams query, CancellationToken ct);
-    Task<JobResponse> GetByIdAsync(Guid id, CancellationToken ct);
-    Task RequestCancelAsync(Guid id, CancellationToken ct);
-    Task RemoveAsync(Guid id, CancellationToken ct);
+    Task<PagedResult<JobResponse>> GetAllAsync(IJobRepository repo, JobQueryParams query, CancellationToken ct);
+    Task<JobResponse> GetByIdAsync(IJobRepository repo, Guid id, CancellationToken ct);
+    Task RequestCancelAsync(IJobRepository repo, Guid id, CancellationToken ct);
+    Task RemoveAsync(IJobRepository repo, Guid id, CancellationToken ct);
 }
 ```
 
