@@ -1,0 +1,65 @@
+using FlowForge.Contracts.Events;
+using FlowForge.Domain.Enums;
+using FlowForge.Domain.Repositories;
+using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.Redis;
+using FlowForge.JobOrchestrator.LoadBalancing;
+
+namespace FlowForge.JobOrchestrator.Workers;
+
+public class JobDispatcherWorker(
+    IMessageConsumer consumer,
+    IMessagePublisher publisher,
+    IWorkflowHostRepository hostRepo,
+    IServiceProvider serviceProvider,
+    ILoadBalancer loadBalancer,
+    ILogger<JobDispatcherWorker> logger) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await foreach (var @event in consumer.ConsumeAsync<JobCreatedEvent>(
+            StreamNames.JobCreated, "job-orchestrator", "orchestrator-1", stoppingToken))
+        {
+            try
+            {
+                var jobRepo = serviceProvider.GetRequiredKeyedService<IJobRepository>(@event.ConnectionId);
+                var job = await jobRepo.GetByIdAsync(@event.JobId, stoppingToken);
+
+                if (job == null)
+                {
+                    logger.LogWarning("Job {JobId} not found in connection {ConnectionId}", @event.JobId, @event.ConnectionId);
+                    continue;
+                }
+
+                var hosts = await hostRepo.GetByGroupAsync(job.HostGroupId, stoppingToken);
+                var onlineHosts = hosts.Where(h => h.IsOnline).ToList();
+
+                if (onlineHosts.Count == 0)
+                {
+                    logger.LogWarning("No online hosts in group {HostGroupId} for job {JobId}", job.HostGroupId, job.Id);
+                    continue;
+                }
+
+                var selectedHost = loadBalancer.Select(onlineHosts, job.HostGroupId);
+
+                job.Transition(JobStatus.Started);
+                job.AssignToHost(selectedHost.Id);
+                await jobRepo.SaveAsync(job, stoppingToken);
+
+                await publisher.PublishAsync(new JobAssignedEvent(
+                    JobId: job.Id,
+                    ConnectionId: @event.ConnectionId,
+                    HostId: selectedHost.Id,
+                    AutomationId: job.AutomationId,
+                    AssignedAt: DateTimeOffset.UtcNow
+                ), StreamNames.HostStream(selectedHost.Id.ToString()), stoppingToken);
+
+                logger.LogInformation("Job {JobId} assigned to host {HostId}", job.Id, selectedHost.Id);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error dispatching job {JobId}", @event.JobId);
+            }
+        }
+    }
+}

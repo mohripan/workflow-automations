@@ -1,44 +1,49 @@
+using FlowForge.Infrastructure;
+using FlowForge.WebApi.Hubs;
+using FlowForge.WebApi.Middleware;
+using FlowForge.WebApi.Services;
+using FlowForge.WebApi.Workers;
+using FlowForge.WebApi.Validators;
+using FluentValidation;
+using FluentValidation.AspNetCore;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+// Add Infrastructure
+builder.Services.AddInfrastructure(builder.Configuration);
+
+// Add Services
+builder.Services.AddScoped<IAutomationService, AutomationService>();
+builder.Services.AddScoped<IJobService, JobService>();
+
+// Add Controllers
+builder.Services.AddControllers();
+
+// Add FluentValidation
+builder.Services.AddFluentValidationAutoValidation();
+builder.Services.AddValidatorsFromAssemblyContaining<CreateAutomationRequestValidator>();
+
+// Add SignalR
+builder.Services.AddSignalR();
+
+// Add Background Workers
+builder.Services.AddHostedService<AutomationTriggeredConsumer>();
+builder.Services.AddHostedService<JobStatusChangedConsumer>();
+
+// Add CORS
+builder.Services.AddCors(options => 
+    options.AddDefaultPolicy(policy =>
+        policy.WithOrigins(builder.Configuration.GetSection("AllowedOrigins").Get<string[]>() ?? ["http://localhost:3000"])
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials()));
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
-
-app.UseHttpsRedirection();
-
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
-app.MapGet("/weatherforecast", () =>
-{
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
-            DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
-            Random.Shared.Next(-20, 55),
-            summaries[Random.Shared.Next(summaries.Length)]
-        ))
-        .ToArray();
-    return forecast;
-})
-.WithName("GetWeatherForecast")
-.WithOpenApi();
+// Middleware
+app.UseMiddleware<ExceptionHandlingMiddleware>();
+app.UseCors();
+app.MapControllers();
+app.MapHub<JobStatusHub>("/hubs/job-status");
 
 app.Run();
-
-record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}

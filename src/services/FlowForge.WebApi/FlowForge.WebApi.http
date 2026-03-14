@@ -1,6 +1,0 @@
-@FlowForge.WebApi_HostAddress = http://localhost:5015
-
-GET {{FlowForge.WebApi_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

@@ -1,0 +1,17 @@
+using FlowForge.Domain.Entities;
+using Microsoft.EntityFrameworkCore;
+
+namespace FlowForge.Infrastructure.Persistence.Platform;
+
+public class PlatformDbContext(DbContextOptions<PlatformDbContext> options) : DbContext(options)
+{
+    public DbSet<Automation> Automations => Set<Automation>();
+    public DbSet<Trigger> Triggers => Set<Trigger>();
+    public DbSet<WorkflowHost> WorkflowHosts => Set<WorkflowHost>();
+    public DbSet<HostGroup> HostGroups => Set<HostGroup>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(PlatformDbContext).Assembly);
+    }
+}
