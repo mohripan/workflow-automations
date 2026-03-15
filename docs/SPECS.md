@@ -54,6 +54,7 @@ FlowForge/
 │   │   │
 │   │   ├── FlowForge.Contracts/                     # Redis Stream message schemas
 │   │   │   ├── Events/
+│   │   │   │   ├── AutomationChangedEvent.cs        # WebApi → JobAutomator (cache sync)
 │   │   │   │   ├── AutomationTriggeredEvent.cs      # JobAutomator → WebApi
 │   │   │   │   ├── JobCreatedEvent.cs               # WebApi → JobOrchestrator (has ConnectionId)
 │   │   │   │   ├── JobAssignedEvent.cs              # JobOrchestrator → WorkflowHost
@@ -123,17 +124,29 @@ FlowForge/
 │       │   └── FlowForge.WebApi.csproj
 │       │
 │       ├── FlowForge.JobAutomator/
+│       │   ├── Cache/
+│       │   │   ├── AutomationCache.cs               # Thread-safe in-memory store
+│       │   │   └── AutomationSnapshot.cs            # Lightweight DTO (no domain entity)
+│       │   ├── Clients/
+│       │   │   ├── IAutomationApiClient.cs
+│       │   │   └── AutomationApiClient.cs           # Typed HttpClient — startup snapshot only
 │       │   ├── Evaluators/
 │       │   │   ├── ITriggerEvaluator.cs
 │       │   │   ├── ScheduleTriggerEvaluator.cs      # Quartz.NET-based
-│       │   │   ├── SqlTriggerEvaluator.cs           # Direct DB polling
-│       │   │   ├── JobCompletedTriggerEvaluator.cs  # Consumes JobStatusChangedEvent
-│       │   │   └── WebhookTriggerEvaluator.cs       # Receives via HTTP (passthrough)
+│       │   │   ├── SqlTriggerEvaluator.cs           # Polls external (user-configured) DB only
+│       │   │   ├── JobCompletedTriggerEvaluator.cs  # Reads Redis flag set by stream consumer
+│       │   │   └── WebhookTriggerEvaluator.cs       # Reads Redis flag set by Web API
 │       │   ├── Conditions/
 │       │   │   └── TriggerConditionEvaluator.cs     # AND/OR tree evaluator
+│       │   ├── Quartz/
+│       │   │   ├── ScheduledTriggerJob.cs           # Sets Redis flag when cron fires
+│       │   │   └── QuartzScheduleSync.cs            # Syncs Quartz jobs when cache updates
 │       │   ├── Workers/
-│       │   │   └── AutomationWorker.cs
-│       │   ├── appsettings.json
+│       │   │   ├── AutomationCacheInitializer.cs    # IHostedService — runs once at startup
+│       │   │   ├── AutomationCacheSyncWorker.cs     # Consumes automation-changed stream
+│       │   │   ├── AutomationWorker.cs              # Evaluation loop
+│       │   │   └── JobCompletedFlagWorker.cs        # Consumes job-status-changed stream
+│       │   ├── appsettings.json                     # No DB connection string
 │       │   ├── Program.cs
 │       │   └── FlowForge.JobAutomator.csproj
 │       │

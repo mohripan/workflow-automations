@@ -171,6 +171,8 @@ Controllers are thin — business logic lives in service classes.
 
 ### IAutomationService
 
+`AutomationService` is responsible for publishing `AutomationChangedEvent` to `flowforge:automation-changed` after every mutation. This is how `JobAutomator` keeps its in-memory cache current — it has no database access of its own.
+
 ```csharp
 public interface IAutomationService
 {
@@ -180,7 +182,33 @@ public interface IAutomationService
     Task<AutomationResponse> UpdateAsync(Guid id, UpdateAutomationRequest request, CancellationToken ct);
     Task DeleteAsync(Guid id, CancellationToken ct);
     Task FireWebhookAsync(Guid id, string? secret, CancellationToken ct);
+
+    // Used by JobAutomator on startup to seed its cache — not a polling endpoint
+    Task<IReadOnlyList<AutomationSnapshot>> GetAllSnapshotsAsync(CancellationToken ct);
 }
+```
+
+Every mutation method must end with a publish:
+
+```csharp
+// Example: AutomationService.CreateAsync (abbreviated)
+public async Task<AutomationResponse> CreateAsync(CreateAutomationRequest request, CancellationToken ct)
+{
+    var automation = Automation.Create(request.Name, request.HostGroupId, request.TaskId, ...);
+    await _automationRepo.SaveAsync(automation, ct);
+
+    // Notify JobAutomator to update its cache
+    await _publisher.PublishAsync(new AutomationChangedEvent(
+        AutomationId: automation.Id,
+        ChangeType:   ChangeType.Created,
+        Automation:   AutomationSnapshot.From(automation)
+    ), ct);
+
+    return AutomationResponse.From(automation);
+}
+
+// Same pattern for UpdateAsync (ChangeType.Updated) and DeleteAsync (ChangeType.Deleted)
+// On DeleteAsync: Automation field is null, only AutomationId is needed
 ```
 
 ### IJobService
