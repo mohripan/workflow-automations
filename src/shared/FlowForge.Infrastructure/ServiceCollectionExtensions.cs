@@ -17,14 +17,24 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration config)
     {
-        // Redis
+        services.AddRedis(config);
+        services.AddPersistence(config);
+        return services;
+    }
+
+    public static IServiceCollection AddRedis(this IServiceCollection services, IConfiguration config)
+    {
         var redisConnString = config.GetSection("Redis:ConnectionString").Value 
             ?? throw new ArgumentNullException("Redis:ConnectionString");
         services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(redisConnString));
         services.AddSingleton<IMessagePublisher, RedisStreamPublisher>();
         services.AddSingleton<IMessageConsumer, RedisStreamConsumer>();
         services.AddSingleton<IRedisService, RedisService>();
+        return services;
+    }
 
+    public static IServiceCollection AddPersistence(this IServiceCollection services, IConfiguration config)
+    {
         // Platform DB
         services.AddDbContext<PlatformDbContext>(options =>
             options.UseNpgsql(config.GetConnectionString("DefaultConnection")));
@@ -45,7 +55,6 @@ public static class ServiceCollectionExtensions
                 return new JobRepository(new JobsDbContext(optionsBuilder.Options));
             });
         }
-
         return services;
     }
 }

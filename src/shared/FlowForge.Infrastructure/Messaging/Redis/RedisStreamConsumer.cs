@@ -42,7 +42,7 @@ public class RedisStreamConsumer(IConnectionMultiplexer redis) : IMessageConsume
                 var json = entry.Values.FirstOrDefault(v => v.Name == "payload").Value;
                 if (!json.IsNull)
                 {
-                    var @event = JsonSerializer.Deserialize<TEvent>(json!);
+                    var @event = JsonSerializer.Deserialize<TEvent>((string)json!);
                     if (@event != null)
                     {
                         yield return @event;

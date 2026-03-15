@@ -9,9 +9,9 @@ namespace FlowForge.WebApi.Controllers;
 public class AutomationsController(IAutomationService automationService) : ControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> GetAll(CancellationToken ct)
+    public async Task<IActionResult> GetAll([FromQuery] AutomationQueryParams query, CancellationToken ct)
     {
-        var result = await automationService.GetAllAsync(ct);
+        var result = await automationService.GetAllAsync(query, ct);
         return Ok(result);
     }
 
@@ -41,6 +41,13 @@ public class AutomationsController(IAutomationService automationService) : Contr
     {
         await automationService.DeleteAsync(id, ct);
         return NoContent();
+    }
+
+    [HttpGet("snapshots")]
+    public async Task<IActionResult> GetAllSnapshots(CancellationToken ct)
+    {
+        var result = await automationService.GetAllSnapshotsAsync(ct);
+        return Ok(result);
     }
 
     [HttpPost("{id:guid}/webhook")]

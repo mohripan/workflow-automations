@@ -8,7 +8,7 @@ public class NativeProcessManager(
     IConfiguration configuration,
     ILogger<NativeProcessManager> logger) : IProcessManager
 {
-    public async Task RunAsync(Guid jobId, string connectionId, CancellationToken ct)
+    public async Task RunAsync(Guid jobId, Guid automationId, string connectionId, CancellationToken ct)
     {
         var enginePath = configuration["WorkflowHost:EnginePath"] ?? "FlowForge.WorkflowEngine.exe";
         var redisConn = configuration["Redis:ConnectionString"] ?? "localhost:6379";
@@ -25,6 +25,7 @@ public class NativeProcessManager(
 
         // Pass configuration via environment variables as per WORKFLOWENGINE.md
         startInfo.EnvironmentVariables["JOB_ID"] = jobId.ToString();
+        startInfo.EnvironmentVariables["JOB_AUTOMATION_ID"] = automationId.ToString();
         startInfo.EnvironmentVariables["CONNECTION_ID"] = connectionId;
         startInfo.EnvironmentVariables["REDIS_CONNECTION"] = redisConn;
 
@@ -53,10 +54,10 @@ public class NativeProcessManager(
 
     private static async Task ConsumeStreamAsync(StreamReader reader, Action<string> logAction)
     {
-        while (!reader.EndOfStream)
+        string? line;
+        while ((line = await reader.ReadLineAsync()) != null)
         {
-            var line = await reader.ReadLineAsync();
-            if (line != null) logAction(line);
+            logAction(line);
         }
     }
 }

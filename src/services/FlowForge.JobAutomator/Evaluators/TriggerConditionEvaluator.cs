@@ -1,32 +1,24 @@
-using FlowForge.Domain.Entities;
-using FlowForge.Domain.Enums;
-using FlowForge.Domain.ValueObjects;
+using FlowForge.Contracts.Events;
 
 namespace FlowForge.JobAutomator.Evaluators;
 
 public class TriggerConditionEvaluator
 {
-    public bool Evaluate(TriggerCondition condition, Dictionary<Guid, bool> triggerResults)
+    public bool Evaluate(TriggerConditionSnapshot node, IReadOnlyDictionary<Guid, bool> triggerResults)
     {
-        if (condition.Nodes.Count == 0) return true;
-
-        var nodeResults = condition.Nodes.Select(node =>
+        if (node.TriggerId.HasValue)
         {
-            if (node.TriggerId.HasValue)
-            {
-                return triggerResults.GetValueOrDefault(node.TriggerId.Value, false);
-            }
-            else if (node.SubCondition != null)
-            {
-                return Evaluate(node.SubCondition, triggerResults);
-            }
-            return false;
-        }).ToList();
+            return triggerResults.GetValueOrDefault(node.TriggerId.Value, false);
+        }
 
-        return condition.Operator switch
+        if (node.Nodes == null || node.Nodes.Count == 0) return true;
+
+        var childResults = node.Nodes.Select(n => Evaluate(n, triggerResults)).ToList();
+
+        return node.Operator switch
         {
-            ConditionOperator.And => nodeResults.All(r => r),
-            ConditionOperator.Or => nodeResults.Any(r => r),
+            FlowForge.Contracts.Events.ConditionOperator.And => childResults.All(r => r),
+            FlowForge.Contracts.Events.ConditionOperator.Or => childResults.Any(r => r),
             _ => false
         };
     }

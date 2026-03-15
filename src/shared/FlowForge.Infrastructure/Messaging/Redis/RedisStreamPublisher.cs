@@ -19,6 +19,7 @@ public class RedisStreamPublisher(IConnectionMultiplexer redis) : IMessagePublis
     private static string GetStreamName<TEvent>() => typeof(TEvent).Name switch
     {
         "AutomationTriggeredEvent" => StreamNames.AutomationTriggered,
+        "AutomationChangedEvent" => StreamNames.AutomationChanged,
         "JobCreatedEvent" => StreamNames.JobCreated,
         "JobAssignedEvent" => StreamNames.JobAssigned,
         "JobStatusChangedEvent" => StreamNames.JobStatusChanged,

@@ -1,5 +1,6 @@
 using FlowForge.Domain.Exceptions;
 using FlowForge.Domain.Repositories;
+using FlowForge.WebApi.DTOs.Requests;
 using FlowForge.WebApi.DTOs.Responses;
 using FlowForge.WebApi.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -14,10 +15,10 @@ public class JobsController(IServiceProvider serviceProvider, IJobService jobSer
         => serviceProvider.GetRequiredKeyedService<IJobRepository>(connectionId);
 
     [HttpGet]
-    public async Task<IActionResult> GetAll(string connectionId, [FromQuery] Guid? automationId, CancellationToken ct)
+    public async Task<IActionResult> GetAll(string connectionId, [FromQuery] JobQueryParams query, CancellationToken ct)
     {
         var repo = GetRepo(connectionId);
-        var result = await jobService.GetAllAsync(repo, automationId, ct);
+        var result = await jobService.GetAllAsync(repo, query, ct);
         return Ok(result);
     }
 
@@ -25,11 +26,8 @@ public class JobsController(IServiceProvider serviceProvider, IJobService jobSer
     public async Task<IActionResult> GetById(string connectionId, Guid id, CancellationToken ct)
     {
         var repo = GetRepo(connectionId);
-        var job = await repo.GetByIdAsync(id, ct) ?? throw new JobNotFoundException(id);
-        
-        // In a real scenario, we'd fetch the automation name here too.
-        // For simplicity, we just return the DTO with basic info or re-use service logic.
-        return Ok(job);
+        var result = await jobService.GetByIdAsync(repo, id, ct);
+        return Ok(result);
     }
 
     [HttpPost("{id:guid}/cancel")]

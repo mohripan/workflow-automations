@@ -3,6 +3,7 @@ namespace FlowForge.Infrastructure.Messaging.Redis;
 public static class StreamNames
 {
     public const string AutomationTriggered = "flowforge:automation-triggered";
+    public const string AutomationChanged = "flowforge:automation-changed";
     public const string JobCreated = "flowforge:job-created";
     public const string JobAssigned = "flowforge:job-assigned";
     public const string JobStatusChanged = "flowforge:job-status-changed";

@@ -31,7 +31,7 @@ public class JobConsumerWorker(
         try
         {
             logger.LogInformation("Job {JobId} starting on host {HostId}", @event.JobId, _hostId);
-            await processManager.RunAsync(@event.JobId, @event.ConnectionId, cts.Token);
+            await processManager.RunAsync(@event.JobId, @event.AutomationId, @event.ConnectionId, cts.Token);
         }
         catch (Exception ex)
         {

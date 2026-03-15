@@ -9,7 +9,14 @@ public class RedisService(IConnectionMultiplexer redis) : IRedisService
 
     public async Task SetAsync(string key, string value, TimeSpan? expiry = null)
     {
-        await _db.StringSetAsync(key, value, expiry);
+        if (expiry.HasValue)
+        {
+            await _db.StringSetAsync(key, value, expiry.Value);
+        }
+        else
+        {
+            await _db.StringSetAsync(key, value);
+        }
     }
 
     public async Task<string?> GetAsync(string key)

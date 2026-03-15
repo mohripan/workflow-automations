@@ -3,6 +3,7 @@ using FlowForge.Domain.Exceptions;
 using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Contracts.Events;
+using FlowForge.WebApi.DTOs.Requests;
 using FlowForge.WebApi.DTOs.Responses;
 
 namespace FlowForge.WebApi.Services;
@@ -11,21 +12,43 @@ public class JobService(
     IMessagePublisher publisher,
     IAutomationRepository automationRepo) : IJobService
 {
-    public async Task<IEnumerable<JobResponse>> GetAllAsync(IJobRepository repo, Guid? automationId, CancellationToken ct)
+    public async Task<PagedResult<JobResponse>> GetAllAsync(IJobRepository repo, JobQueryParams query, CancellationToken ct)
     {
-        var jobs = await repo.GetAllAsync(automationId, ct);
-        var responses = new List<JobResponse>();
+        var jobs = await repo.GetAllAsync(query.AutomationId, ct);
         
-        foreach (var job in jobs)
+        var filtered = jobs.AsQueryable();
+        if (query.Status.HasValue)
+            filtered = filtered.Where(j => j.Status == query.Status.Value);
+
+        var total = filtered.Count();
+        var items = new List<JobResponse>();
+        
+        var pagedJobs = filtered
+            .Skip((query.Page - 1) * query.PageSize)
+            .Take(query.PageSize)
+            .ToList();
+
+        foreach (var job in pagedJobs)
         {
             var automation = await automationRepo.GetByIdAsync(job.AutomationId, ct);
-            responses.Add(new JobResponse(
+            items.Add(new JobResponse(
                 job.Id, job.AutomationId, automation?.Name ?? "Unknown", job.HostGroupId,
                 job.HostId, job.Status, job.Message, job.CreatedAt, job.UpdatedAt
             ));
         }
         
-        return responses;
+        return new PagedResult<JobResponse>(items, total, query.Page, query.PageSize);
+    }
+
+    public async Task<JobResponse> GetByIdAsync(IJobRepository repo, Guid id, CancellationToken ct)
+    {
+        var job = await repo.GetByIdAsync(id, ct) ?? throw new JobNotFoundException(id);
+        var automation = await automationRepo.GetByIdAsync(job.AutomationId, ct);
+        
+        return new JobResponse(
+            job.Id, job.AutomationId, automation?.Name ?? "Unknown", job.HostGroupId,
+            job.HostId, job.Status, job.Message, job.CreatedAt, job.UpdatedAt
+        );
     }
 
     public async Task RequestCancelAsync(IJobRepository repo, Guid id, CancellationToken ct)

@@ -4,6 +4,7 @@ using FlowForge.WebApi.Middleware;
 using FlowForge.WebApi.Services;
 using FlowForge.WebApi.Workers;
 using FlowForge.WebApi.Validators;
+using Microsoft.OpenApi;
 using FluentValidation;
 using FluentValidation.AspNetCore;
 
@@ -21,10 +22,7 @@ builder.Services.AddControllers();
 
 // Add Swagger
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new() { Title = "FlowForge Web API", Version = "v1" });
-});
+builder.Services.AddSwaggerGen();
 
 // Add FluentValidation
 builder.Services.AddFluentValidationAutoValidation();

@@ -8,15 +8,17 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 var jobIdStr = Environment.GetEnvironmentVariable("JOB_ID");
+var automationIdStr = Environment.GetEnvironmentVariable("JOB_AUTOMATION_ID");
 var connectionId = Environment.GetEnvironmentVariable("CONNECTION_ID");
 
-if (string.IsNullOrEmpty(jobIdStr) || string.IsNullOrEmpty(connectionId))
+if (string.IsNullOrEmpty(jobIdStr) || string.IsNullOrEmpty(connectionId) || string.IsNullOrEmpty(automationIdStr))
 {
-    Console.WriteLine("JOB_ID and CONNECTION_ID must be set");
+    Console.WriteLine("JOB_ID, JOB_AUTOMATION_ID and CONNECTION_ID must be set");
     return 1;
 }
 
 var jobId = Guid.Parse(jobIdStr);
+var automationId = Guid.Parse(automationIdStr);
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -60,7 +62,7 @@ try
         }
     }, cts.Token);
 
-    await reporter.ReportStatusAsync(jobId, connectionId, JobStatus.InProgress, ct: cts.Token);
+    await reporter.ReportStatusAsync(jobId, automationId, connectionId, JobStatus.InProgress, ct: cts.Token);
 
     var context = new WorkflowContext
     {
@@ -83,16 +85,16 @@ try
         _ => JobStatus.Error
     };
 
-    await reporter.ReportStatusAsync(jobId, connectionId, finalStatus, result.Message, CancellationToken.None);
+    await reporter.ReportStatusAsync(jobId, automationId, connectionId, finalStatus, result.Message, CancellationToken.None);
     return result.Status == WorkflowResultStatus.Error ? 1 : 0;
 }
 catch (OperationCanceledException)
 {
-    await reporter.ReportStatusAsync(jobId, connectionId, JobStatus.Cancelled, "Cancelled", CancellationToken.None);
+    await reporter.ReportStatusAsync(jobId, automationId, connectionId, JobStatus.Cancelled, "Cancelled", CancellationToken.None);
     return 0;
 }
 catch (Exception ex)
 {
-    await reporter.ReportStatusAsync(jobId, connectionId, JobStatus.Error, ex.Message, CancellationToken.None);
+    await reporter.ReportStatusAsync(jobId, automationId, connectionId, JobStatus.Error, ex.Message, CancellationToken.None);
     return 1;
 }

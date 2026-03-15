@@ -1,31 +1,39 @@
-using FlowForge.Domain.Entities;
-using Microsoft.EntityFrameworkCore;
-using FlowForge.Infrastructure.Persistence.Platform;
+using FlowForge.Contracts.Events;
+using FlowForge.Domain.Enums;
+using FlowForge.Infrastructure.Caching;
 using System.Text.Json;
+using Npgsql;
 
 namespace FlowForge.JobAutomator.Evaluators;
 
-public class SqlTriggerEvaluator(PlatformDbContext context) : ITriggerEvaluator
+public class SqlTriggerEvaluator(IRedisService redis) : ITriggerEvaluator
 {
-    public async Task<bool> EvaluateAsync(Trigger trigger, CancellationToken ct)
+    public TriggerType Type => TriggerType.Sql;
+
+    public async Task<bool> EvaluateAsync(TriggerSnapshot trigger, CancellationToken ct)
     {
         var config = JsonSerializer.Deserialize<SqlConfig>(trigger.ConfigJson);
-        if (config == null || string.IsNullOrWhiteSpace(config.Query)) return false;
+        if (config == null || string.IsNullOrWhiteSpace(config.Query) || string.IsNullOrWhiteSpace(config.ConnectionString)) 
+            return false;
 
         try
         {
-            // Execute the query using the DB context or raw SQL.
-            // For security, a real system would use a read-only connection.
-            // For this mock, we check if the query returns any results.
-            
-            using var command = context.Database.GetDbConnection().CreateCommand();
-            command.CommandText = config.Query;
-            if (command.Connection!.State != System.Data.ConnectionState.Open)
-                await command.Connection.OpenAsync(ct);
+            using var connection = new NpgsqlConnection(config.ConnectionString);
+            await connection.OpenAsync(ct);
 
+            using var command = connection.CreateCommand();
+            command.CommandText = config.Query;
+            
             var result = await command.ExecuteScalarAsync(ct);
             
-            // If the query returns a non-zero count or a boolean true, trigger it.
+            var hash = result?.ToString() ?? "null";
+            var lastHashKey = $"trigger:sql:{trigger.Id}:last-hash";
+            var lastHash = await redis.GetAsync(lastHashKey);
+
+            if (hash == lastHash) return false;
+
+            await redis.SetAsync(lastHashKey, hash);
+
             if (result is bool b) return b;
             if (result is int i) return i > 0;
             if (result is long l) return l > 0;
@@ -38,5 +46,5 @@ public class SqlTriggerEvaluator(PlatformDbContext context) : ITriggerEvaluator
         }
     }
 
-    private record SqlConfig(string Query);
+    private record SqlConfig(string Query, string ConnectionString);
 }
