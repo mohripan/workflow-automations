@@ -1,4 +1,3 @@
-﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
@@ -6,6 +5,8 @@ MinimumVisualStudioVersion = 10.0.40219.1
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{A624B0B4-C0A4-48F4-A32C-D4924AE4187D}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "services", "services", "{C2A6298F-BF89-4A12-A24D-A8DA9417F29F}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "shared", "shared", "{72F29669-6691-451E-BD4F-B40A7E1650D9}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FlowForge.JobAutomator", "src\services\FlowForge.JobAutomator\FlowForge.JobAutomator.csproj", "{FCC6CE76-65D0-419B-80B5-42BF495270F5}"
 EndProject
@@ -17,8 +18,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FlowForge.WorkflowEngine", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FlowForge.WorkflowHost", "src\services\FlowForge.WorkflowHost\FlowForge.WorkflowHost.csproj", "{AE8ED53C-DCA9-4C36-8146-CDCA39A33B1C}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "shared", "shared", "{72F29669-6691-451E-BD4F-B40A7E1650D9}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FlowForge.Contracts", "src\shared\FlowForge.Contracts\FlowForge.Contracts.csproj", "{81959D4B-CACD-4EDA-8F79-51A2DD155D13}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FlowForge.Domain", "src\shared\FlowForge.Domain\FlowForge.Domain.csproj", "{4CD11E40-86ED-4C2A-A49A-CF6EA28A372A}"
@@ -29,9 +28,6 @@ Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
 		Release|Any CPU = Release|Any CPU
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{FCC6CE76-65D0-419B-80B5-42BF495270F5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
@@ -67,14 +63,17 @@ Global
 		{C0FD2B8B-D112-4FD5-A232-C3F302714CC3}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C0FD2B8B-D112-4FD5-A232-C3F302714CC3}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{C2A6298F-BF89-4A12-A24D-A8DA9417F29F} = {A624B0B4-C0A4-48F4-A32C-D4924AE4187D}
+		{72F29669-6691-451E-BD4F-B40A7E1650D9} = {A624B0B4-C0A4-48F4-A32C-D4924AE4187D}
 		{FCC6CE76-65D0-419B-80B5-42BF495270F5} = {C2A6298F-BF89-4A12-A24D-A8DA9417F29F}
 		{C4E9F6BA-F88F-4FE3-ABBA-F69E5716B34D} = {C2A6298F-BF89-4A12-A24D-A8DA9417F29F}
 		{4C7BF217-D4A1-47B9-BC90-F4CE3FE3FAB9} = {C2A6298F-BF89-4A12-A24D-A8DA9417F29F}
 		{D9ED7D9D-BCA2-491F-AF5D-1ED16FC2F758} = {C2A6298F-BF89-4A12-A24D-A8DA9417F29F}
 		{AE8ED53C-DCA9-4C36-8146-CDCA39A33B1C} = {C2A6298F-BF89-4A12-A24D-A8DA9417F29F}
-		{72F29669-6691-451E-BD4F-B40A7E1650D9} = {A624B0B4-C0A4-48F4-A32C-D4924AE4187D}
 		{81959D4B-CACD-4EDA-8F79-51A2DD155D13} = {72F29669-6691-451E-BD4F-B40A7E1650D9}
 		{4CD11E40-86ED-4C2A-A49A-CF6EA28A372A} = {72F29669-6691-451E-BD4F-B40A7E1650D9}
 		{C0FD2B8B-D112-4FD5-A232-C3F302714CC3} = {72F29669-6691-451E-BD4F-B40A7E1650D9}
