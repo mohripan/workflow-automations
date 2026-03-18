@@ -23,6 +23,7 @@ FlowForge/
 ├── AGENTS.md
 ├── SPECS.md
 ├── CONVENTIONS.md
+├── TRIGGERS.md           ← trigger type system, custom-script, TriggersController
 ├── JOBAUTOMATOR.md
 ├── JOBORCHESTRATOR.md
 ├── WORKFLOWHOST.md
@@ -30,49 +31,57 @@ FlowForge/
 │
 ├── src/
 │   │
-│   ├── shared/                                      # Referenced by ALL services
+│   ├── shared/
 │   │   │
-│   │   ├── FlowForge.Domain/                        # Pure domain — zero external deps
+│   │   ├── FlowForge.Domain/
 │   │   │   ├── Entities/
-│   │   │   │   ├── Automation.cs                    # Automation definition (has TaskId)
-│   │   │   │   ├── Job.cs                           # Job instance (has TaskId + ConnectionId)
-│   │   │   │   ├── Trigger.cs                       # Trigger configuration
-│   │   │   │   ├── WorkflowHost.cs                  # Host registration record
-│   │   │   │   └── HostGroup.cs                     # Group of hosts (has ConnectionId)
+│   │   │   │   ├── Automation.cs                    # IsEnabled, ConditionRoot required
+│   │   │   │   ├── Job.cs
+│   │   │   │   ├── Trigger.cs                       # TypeId is string; Name unique within Automation
+│   │   │   │   ├── WorkflowHost.cs
+│   │   │   │   └── HostGroup.cs
+│   │   │   ├── Triggers/
+│   │   │   │   ├── TriggerTypes.cs                  # String constants: "schedule", "sql", etc.
+│   │   │   │   ├── ITriggerTypeDescriptor.cs        # Self-describes a type + validates configJson
+│   │   │   │   ├── ITriggerTypeRegistry.cs          # Lookup by TypeId; populated at startup
+│   │   │   │   ├── TriggerConfigSchema.cs           # Schema DTO returned by TriggersController
+│   │   │   │   └── ConfigField.cs                   # One field descriptor (name, label, dataType, ...)
 │   │   │   ├── Enums/
 │   │   │   │   ├── JobStatus.cs
-│   │   │   │   ├── TriggerType.cs                   # Schedule | Sql | JobCompleted | Webhook
-│   │   │   │   └── ConditionOperator.cs             # And | Or
+│   │   │   │   ├── ConditionOperator.cs             # And | Or
+│   │   │   │   └── ConfigFieldType.cs               # String | Int | Bool | CronExpression | Script | ...
 │   │   │   ├── ValueObjects/
-│   │   │   │   └── TriggerCondition.cs              # Condition tree node
+│   │   │   │   └── TriggerConditionNode.cs          # Recursive AND/OR tree; leaf uses TriggerName (string)
 │   │   │   ├── Exceptions/
 │   │   │   │   ├── DomainException.cs
 │   │   │   │   ├── JobNotFoundException.cs
 │   │   │   │   ├── AutomationNotFoundException.cs
+│   │   │   │   ├── InvalidAutomationException.cs    # Empty triggers, null condition, unknown TypeId
+│   │   │   │   ├── InvalidTriggerConditionException.cs
 │   │   │   │   └── UnknownConnectionIdException.cs
-│   │   │   └── FlowForge.Domain.csproj              # No external NuGet deps
+│   │   │   └── FlowForge.Domain.csproj
 │   │   │
-│   │   ├── FlowForge.Contracts/                     # Redis Stream message schemas
+│   │   ├── FlowForge.Contracts/
 │   │   │   ├── Events/
-│   │   │   │   ├── AutomationChangedEvent.cs        # WebApi → JobAutomator (cache sync)
-│   │   │   │   ├── AutomationTriggeredEvent.cs      # JobAutomator → WebApi
-│   │   │   │   ├── JobCreatedEvent.cs               # WebApi → JobOrchestrator (has ConnectionId)
-│   │   │   │   ├── JobAssignedEvent.cs              # JobOrchestrator → WorkflowHost
-│   │   │   │   ├── JobStatusChangedEvent.cs         # WorkflowEngine → WebApi (has ConnectionId)
-│   │   │   │   └── JobCancelRequestedEvent.cs       # WebApi → WorkflowHost
-│   │   │   └── FlowForge.Contracts.csproj           # DTO only — minimal deps
+│   │   │   │   ├── AutomationChangedEvent.cs
+│   │   │   │   ├── AutomationTriggeredEvent.cs
+│   │   │   │   ├── JobCreatedEvent.cs
+│   │   │   │   ├── JobAssignedEvent.cs
+│   │   │   │   ├── JobStatusChangedEvent.cs
+│   │   │   │   └── JobCancelRequestedEvent.cs
+│   │   │   └── FlowForge.Contracts.csproj
 │   │   │
-│   │   └── FlowForge.Infrastructure/                # Shared infra implementations
+│   │   └── FlowForge.Infrastructure/
 │   │       ├── Persistence/
-│   │       │   ├── Platform/                        # Platform DB: Automations, HostGroups
+│   │       │   ├── Platform/
 │   │       │   │   ├── PlatformDbContext.cs
 │   │       │   │   ├── Migrations/
 │   │       │   │   └── Configurations/
-│   │       │   │       ├── AutomationConfiguration.cs
-│   │       │   │       ├── TriggerConfiguration.cs
+│   │       │   │       ├── AutomationConfiguration.cs   # TriggerConditionNode as owned JSON column
+│   │       │   │       ├── TriggerConfiguration.cs      # Unique index (AutomationId, Name); TypeId varchar(100)
 │   │       │   │       ├── WorkflowHostConfiguration.cs
 │   │       │   │       └── HostGroupConfiguration.cs
-│   │       │   └── Jobs/                            # Per-host-group DB: Jobs only
+│   │       │   └── Jobs/
 │   │       │       ├── JobsDbContext.cs
 │   │       │       ├── Migrations/
 │   │       │       └── Configurations/
@@ -83,70 +92,82 @@ FlowForge/
 │   │       │   │   └── IMessageConsumer.cs
 │   │       │   └── Redis/
 │   │       │       ├── RedisStreamPublisher.cs
-│   │       │       ├── RedisStreamConsumer.cs       # Consumer group support
-│   │       │       └── StreamNames.cs               # Stream name constants
+│   │       │       ├── RedisStreamConsumer.cs
+│   │       │       └── StreamNames.cs
 │   │       ├── Caching/
 │   │       │   ├── IRedisService.cs
-│   │       │   └── RedisService.cs                  # Heartbeat TTL, scalars, cache
+│   │       │   └── RedisService.cs
 │   │       ├── Repositories/
-│   │       │   ├── IJobRepository.cs                # Resolved by ConnectionId at runtime
+│   │       │   ├── IJobRepository.cs
 │   │       │   ├── IAutomationRepository.cs
 │   │       │   └── IHostGroupRepository.cs
 │   │       ├── MultiDb/
-│   │       │   ├── JobsDbContextFactory.cs          # Creates JobsDbContext per ConnectionId
-│   │       │   └── ConnectionRegistry.cs            # Maps ConnectionId → connection string + provider
-│   │       ├── ServiceCollectionExtensions.cs       # AddInfrastructure(IConfiguration)
+│   │       │   ├── JobsDbContextFactory.cs
+│   │       │   └── ConnectionRegistry.cs
+│   │       ├── Triggers/
+│   │       │   ├── TriggerTypeRegistry.cs           # ITriggerTypeRegistry implementation
+│   │       │   └── Descriptors/
+│   │       │       ├── ScheduleTriggerDescriptor.cs
+│   │       │       ├── SqlTriggerDescriptor.cs
+│   │       │       ├── JobCompletedTriggerDescriptor.cs
+│   │       │       ├── WebhookTriggerDescriptor.cs
+│   │       │       └── CustomScriptTriggerDescriptor.cs
+│   │       ├── ServiceCollectionExtensions.cs       # AddInfrastructure — registers all descriptors
 │   │       └── FlowForge.Infrastructure.csproj
 │   │
 │   └── services/
 │       │
 │       ├── FlowForge.WebApi/
 │       │   ├── Controllers/
-│       │   │   ├── AutomationsController.cs
-│       │   │   ├── JobsController.cs                # Route: /api/{connectionId}/jobs
-│       │   │   ├── TriggersController.cs
+│       │   │   ├── AutomationsController.cs         # enable/disable endpoints
+│       │   │   ├── JobsController.cs
+│       │   │   ├── TriggersController.cs            # GET types, GET type/{id}, POST validate-config
 │       │   │   └── HostGroupsController.cs
 │       │   ├── Hubs/
-│       │   │   └── JobStatusHub.cs                  # SignalR — frontend only
+│       │   │   └── JobStatusHub.cs
 │       │   ├── DTOs/
 │       │   │   ├── Requests/
-│       │   │   │   ├── CreateAutomationRequest.cs
+│       │   │   │   ├── CreateAutomationRequest.cs   # CreateTriggerRequest.TypeId is string
 │       │   │   │   ├── UpdateAutomationRequest.cs
+│       │   │   │   ├── ValidateConfigRequest.cs
 │       │   │   │   └── CancelJobRequest.cs
 │       │   │   └── Responses/
-│       │   │       ├── AutomationResponse.cs
-│       │   │       └── JobResponse.cs
+│       │   │       ├── AutomationResponse.cs        # TriggerResponse.TypeId is string
+│       │   │       ├── JobResponse.cs
+│       │   │       └── TriggerConfigValidationResult.cs
+│       │   ├── Validators/
+│       │   │   └── CreateAutomationRequestValidator.cs
 │       │   ├── Middleware/
 │       │   │   └── ExceptionHandlingMiddleware.cs
 │       │   ├── appsettings.json
-│       │   ├── appsettings.Development.json
 │       │   ├── Program.cs
 │       │   └── FlowForge.WebApi.csproj
 │       │
 │       ├── FlowForge.JobAutomator/
 │       │   ├── Cache/
-│       │   │   ├── AutomationCache.cs               # Thread-safe in-memory store
-│       │   │   └── AutomationSnapshot.cs            # Lightweight DTO (no domain entity)
+│       │   │   ├── AutomationCache.cs
+│       │   │   └── AutomationSnapshot.cs            # TriggerSnapshot.TypeId is string
 │       │   ├── Clients/
 │       │   │   ├── IAutomationApiClient.cs
-│       │   │   └── AutomationApiClient.cs           # Typed HttpClient — startup snapshot only
+│       │   │   └── AutomationApiClient.cs
 │       │   ├── Evaluators/
-│       │   │   ├── ITriggerEvaluator.cs
-│       │   │   ├── ScheduleTriggerEvaluator.cs      # Quartz.NET-based
-│       │   │   ├── SqlTriggerEvaluator.cs           # Polls external (user-configured) DB only
-│       │   │   ├── JobCompletedTriggerEvaluator.cs  # Reads Redis flag set by stream consumer
-│       │   │   └── WebhookTriggerEvaluator.cs       # Reads Redis flag set by Web API
+│       │   │   ├── ITriggerEvaluator.cs             # TypeId property is string (not enum)
+│       │   │   ├── ScheduleTriggerEvaluator.cs
+│       │   │   ├── SqlTriggerEvaluator.cs
+│       │   │   ├── JobCompletedTriggerEvaluator.cs
+│       │   │   ├── WebhookTriggerEvaluator.cs
+│       │   │   └── CustomScriptTriggerEvaluator.cs  # Runs Python subprocess
 │       │   ├── Conditions/
-│       │   │   └── TriggerConditionEvaluator.cs     # AND/OR tree evaluator
+│       │   │   └── TriggerConditionEvaluator.cs
 │       │   ├── Quartz/
-│       │   │   ├── ScheduledTriggerJob.cs           # Sets Redis flag when cron fires
-│       │   │   └── QuartzScheduleSync.cs            # Syncs Quartz jobs when cache updates
+│       │   │   ├── ScheduledTriggerJob.cs
+│       │   │   └── QuartzScheduleSync.cs
 │       │   ├── Workers/
-│       │   │   ├── AutomationCacheInitializer.cs    # IHostedService — runs once at startup
-│       │   │   ├── AutomationCacheSyncWorker.cs     # Consumes automation-changed stream
-│       │   │   ├── AutomationWorker.cs              # Evaluation loop
-│       │   │   └── JobCompletedFlagWorker.cs        # Consumes job-status-changed stream
-│       │   ├── appsettings.json                     # No DB connection string
+│       │   │   ├── AutomationCacheInitializer.cs
+│       │   │   ├── AutomationCacheSyncWorker.cs
+│       │   │   ├── AutomationWorker.cs
+│       │   │   └── JobCompletedFlagWorker.cs
+│       │   ├── appsettings.json                     # CustomScript section (ScriptTempDir, VenvCacheDir)
 │       │   ├── Program.cs
 │       │   └── FlowForge.JobAutomator.csproj
 │       │
@@ -155,8 +176,8 @@ FlowForge/
 │       │   │   ├── ILoadBalancer.cs
 │       │   │   └── RoundRobinLoadBalancer.cs
 │       │   ├── Workers/
-│       │   │   ├── JobDispatcherWorker.cs           # Consume JobCreatedEvent
-│       │   │   └── HeartbeatMonitorWorker.cs        # Monitor Redis TTL
+│       │   │   ├── JobDispatcherWorker.cs
+│       │   │   └── HeartbeatMonitorWorker.cs
 │       │   ├── appsettings.json
 │       │   ├── Program.cs
 │       │   └── FlowForge.JobOrchestrator.csproj
@@ -165,49 +186,52 @@ FlowForge/
 │       │   ├── ProcessManagement/
 │       │   │   ├── IProcessManager.cs
 │       │   │   ├── DockerProcessManager.cs
-│       │   │   └── NativeProcessManager.cs          # Linux process group fallback
+│       │   │   └── NativeProcessManager.cs
 │       │   ├── Workers/
-│       │   │   ├── JobConsumerWorker.cs             # Consumes per-host stream
-│       │   │   └── CancelConsumerWorker.cs          # Consumes cancel requests
+│       │   │   ├── JobConsumerWorker.cs
+│       │   │   └── CancelConsumerWorker.cs
 │       │   ├── appsettings.json
 │       │   ├── Program.cs
 │       │   └── FlowForge.WorkflowHost.csproj
 │       │
 │       └── FlowForge.WorkflowEngine/
 │           ├── Handlers/
-│           │   ├── IWorkflowHandler.cs              # Interface all handlers implement
-│           │   ├── WorkflowHandlerRegistry.cs       # Resolves TaskId → IWorkflowHandler
-│           │   ├── WorkflowContext.cs               # Input params + output store
-│           │   ├── WorkflowResult.cs                # Success | Failed | Cancelled
-│           │   ├── Built-in/
-│           │   │   ├── SendEmailHandler.cs          # TaskId: "send-email"
-│           │   │   ├── HttpRequestHandler.cs        # TaskId: "http-request"
-│           │   │   └── RunScriptHandler.cs          # TaskId: "run-script" (Python/JS/shell)
+│           │   ├── IWorkflowHandler.cs
+│           │   ├── WorkflowHandlerRegistry.cs
+│           │   ├── WorkflowContext.cs
+│           │   ├── WorkflowResult.cs
+│           │   └── Built-in/
+│           │       ├── SendEmailHandler.cs
+│           │       ├── HttpRequestHandler.cs
+│           │       └── RunScriptHandler.cs
 │           ├── Reporting/
 │           │   ├── IJobReporter.cs
-│           │   └── JobProgressReporter.cs           # Publish status + heartbeat
+│           │   └── JobProgressReporter.cs
 │           ├── appsettings.json
 │           ├── Program.cs
 │           └── FlowForge.WorkflowEngine.csproj
 │
 ├── tests/
 │   ├── FlowForge.Domain.Tests/
+│   │   ├── AutomationTests.cs
 │   │   └── TriggerConditionEvaluatorTests.cs
 │   ├── FlowForge.JobAutomator.Tests/
 │   │   ├── ScheduleTriggerEvaluatorTests.cs
-│   │   └── SqlTriggerEvaluatorTests.cs
+│   │   ├── SqlTriggerEvaluatorTests.cs
+│   │   └── CustomScriptTriggerEvaluatorTests.cs
 │   ├── FlowForge.JobOrchestrator.Tests/
 │   │   └── RoundRobinLoadBalancerTests.cs
 │   └── FlowForge.WebApi.Tests/
-│       └── AutomationsControllerTests.cs
+│       ├── AutomationsControllerTests.cs
+│       └── TriggersControllerTests.cs
 │
 └── deploy/
     ├── docker/
-    │   ├── docker-compose.yml                       # Full local dev stack
-    │   ├── docker-compose.override.yml              # Hot reload + exposed ports
+    │   ├── docker-compose.yml
+    │   ├── docker-compose.override.yml
     │   └── Dockerfiles/
     │       ├── Dockerfile.WebApi
-    │       ├── Dockerfile.JobAutomator
+    │       ├── Dockerfile.JobAutomator     ← must include Python 3 + pip
     │       ├── Dockerfile.JobOrchestrator
     │       ├── Dockerfile.WorkflowHost
     │       └── Dockerfile.WorkflowEngine
@@ -216,24 +240,92 @@ FlowForge/
         ├── configmaps/
         │   └── app-config.yaml
         ├── webapi/
-        │   ├── deployment.yaml
-        │   └── service.yaml
         ├── job-automator/
-        │   └── deployment.yaml                      # Scalable via consumer groups
         ├── job-orchestrator/
-        │   └── deployment.yaml                      # Single replica
         ├── workflow-host/
-        │   └── daemonset.yaml                       # 1 per node
         └── infrastructure/
-            ├── redis.yaml
-            └── postgres.yaml
 ```
 
 ---
 
-## .csproj Target Frameworks
+## Domain Entity: Automation
 
-All projects target `net10.0`.
+```csharp
+public class Automation : BaseEntity<Guid>
+{
+    public string                 Name          { get; private set; }
+    public string?                Description   { get; private set; }
+    public Guid                   HostGroupId   { get; private set; }
+    public string                 TaskId        { get; private set; }
+    public bool                   IsEnabled     { get; private set; }  // default true
+    public TriggerConditionNode   ConditionRoot { get; private set; }  // never null
+    public IReadOnlyList<Trigger> Triggers      { get; private set; }  // at least 1
+
+    public static Automation Create(...)
+    {
+        // Throws InvalidAutomationException if triggers empty or conditionRoot null
+        // Throws InvalidTriggerConditionException if condition references unknown TriggerName
+    }
+
+    public void Enable()  => IsEnabled = true;
+    public void Disable() => IsEnabled = false;
+}
+```
+
+## Domain Entity: Trigger
+
+```csharp
+public class Trigger : BaseEntity<Guid>
+{
+    public Guid   AutomationId { get; private set; }
+    public string Name         { get; private set; }   // unique within Automation
+    public string TypeId       { get; private set; }   // matches TriggerTypes constants
+    public string ConfigJson   { get; private set; }
+}
+```
+
+`TypeId` is stored as `varchar(100)`. Valid values are the constants in `TriggerTypes`; validation is done in the service layer via `ITriggerTypeRegistry.IsKnown(typeId)` before the entity is created.
+
+## Static Class: TriggerTypes
+
+```csharp
+// FlowForge.Domain/Triggers/TriggerTypes.cs
+public static class TriggerTypes
+{
+    public const string Schedule     = "schedule";
+    public const string Sql          = "sql";
+    public const string JobCompleted = "job-completed";
+    public const string Webhook      = "webhook";
+    public const string CustomScript = "custom-script";
+}
+```
+
+**There is no `TriggerType` enum.** All code uses these string constants.
+
+## Value Object: TriggerConditionNode
+
+```csharp
+public record TriggerConditionNode(
+    ConditionOperator?                   Operator,
+    string?                              TriggerName,  // non-null on leaf nodes
+    IReadOnlyList<TriggerConditionNode>? Nodes
+);
+```
+
+## Domain Exceptions
+
+| Exception | Thrown When |
+|---|---|
+| `InvalidAutomationException` | Empty triggers, null condition, or unknown `TypeId` in service layer |
+| `InvalidTriggerConditionException` | Condition references a `TriggerName` not in triggers list |
+| `JobNotFoundException` | Job lookup returns null |
+| `AutomationNotFoundException` | Automation lookup returns null |
+| `InvalidJobTransitionException` | Illegal job status transition |
+| `UnknownConnectionIdException` | `ConnectionId` not in config |
+
+---
+
+## .csproj Target Frameworks
 
 ```xml
 <PropertyGroup>
@@ -249,12 +341,9 @@ All projects target `net10.0`.
 ## Dependency Graph
 
 ```
-# Shared (innermost first)
 FlowForge.Domain          → (no external deps)
-FlowForge.Contracts       → (no external deps — pure DTOs)
+FlowForge.Contracts       → (no external deps)
 FlowForge.Infrastructure  → Domain, Contracts, EF Core, StackExchange.Redis
-
-# Services (all depend on shared)
 FlowForge.WebApi          → Domain, Contracts, Infrastructure
 FlowForge.JobAutomator    → Domain, Contracts, Infrastructure, Quartz
 FlowForge.JobOrchestrator → Domain, Contracts, Infrastructure
@@ -273,6 +362,7 @@ FlowForge.WorkflowEngine  → Domain, Contracts, Infrastructure
 | `StackExchange.Redis` | Infrastructure |
 | `Quartz` | JobAutomator |
 | `Microsoft.AspNetCore.SignalR` | WebApi |
+| `FluentValidation.AspNetCore` | WebApi |
 
 ---
 
@@ -281,54 +371,30 @@ FlowForge.WorkflowEngine  → Domain, Contracts, Infrastructure
 ```
 [Trigger fires]
   JobAutomator ──[AutomationTriggeredEvent]──► WebApi
-                                                │ creates Job in host group's DB
-                                                │ (DB selected via ConnectionId)
-                                                │
   WebApi ──[JobCreatedEvent + ConnectionId]───► JobOrchestrator
-                                                │ picks host via round-robin
-                                                │ updates Job (status=Started, hostId)
-                                                │
   JobOrchestrator ──[JobAssignedEvent]────────► WorkflowHost (per-host stream)
-                                                │ spawns WorkflowEngine child process
-                                                │ passes JOB_ID + CONNECTION_ID env vars
-                                                │
-  WorkflowEngine ──[JobStatusChangedEvent     ► WebApi (InProgress / Completed / Error)
-                     + ConnectionId]            │ WebApi updates correct host group DB
-  WorkflowEngine ──[heartbeat:{jobId} TTL]────► Redis (every 5s, TTL 30s)
+  WorkflowEngine ──[JobStatusChangedEvent]────► WebApi
+  WorkflowEngine ──[heartbeat:{jobId} TTL]────► Redis
 
-[Cancel request]
+[Cancel]
   WebApi ──[JobCancelRequestedEvent]──────────► WorkflowHost
-                                                │ kills child process (grace period)
-                                                │
-  WorkflowEngine ──[JobStatusChangedEvent]────► WebApi (status=Cancelled)
+
+[Automation enabled/disabled]
+  WebApi ──[AutomationChangedEvent (Updated)]─► JobAutomator → cache + Quartz sync
 ```
 
 ---
 
 ## Multi-Database Architecture
 
-Each `HostGroup` has a `ConnectionId` (e.g. `wf-jobs-minion`, `wf-jobs-titan`) that maps to a dedicated database. Jobs are stored in and queried from their host group's database. Automations, HostGroups, and WorkflowHosts are stored in a single **platform database**.
-
 ```json
-// appsettings.json (WebApi, JobOrchestrator, WorkflowEngine)
 {
-  "Platform": {
-    "ConnectionString": "Host=postgres;Database=flowforge_platform;..."
-  },
+  "Platform": { "ConnectionString": "..." },
   "JobConnections": {
-    "wf-jobs-minion": {
-      "ConnectionString": "Host=postgres;Database=flowforge_minion;...",
-      "Provider": "PostgreSQL"
-    },
-    "wf-jobs-titan": {
-      "ConnectionString": "Host=postgres-titan;Database=flowforge_titan;...",
-      "Provider": "PostgreSQL"
-    }
+    "wf-jobs-minion": { "ConnectionString": "...", "Provider": "PostgreSQL" }
   }
 }
 ```
-
-`ConnectionRegistry` maps a `ConnectionId` string to the correct `JobsDbContext` at runtime. Controllers and consumers resolve `IJobRepository` by `ConnectionId` using .NET Keyed Services — no Service Locator pattern required.
 
 ---
 
@@ -336,8 +402,8 @@ Each `HostGroup` has a `ConnectionId` (e.g. `wf-jobs-minion`, `wf-jobs-titan`) t
 
 | Service | Kind | Reason |
 |---|---|---|
-| WebApi | Deployment | Stateless, horizontally scalable |
-| JobAutomator | Deployment | Scale via Redis consumer groups |
-| JobOrchestrator | Deployment (1 replica) | Stateful round-robin; add leader election for HA |
-| WorkflowHost | DaemonSet | One per node; `hostId` derived from node name |
-| WorkflowEngine | (not deployed) | Spawned by WorkflowHost as child process |
+| WebApi | Deployment | Stateless, scalable |
+| JobAutomator | Deployment | Redis consumer groups; **requires Python 3 in image** |
+| JobOrchestrator | Deployment (1 replica) | Stateful round-robin |
+| WorkflowHost | DaemonSet | One per node |
+| WorkflowEngine | (not deployed) | Spawned as child process |

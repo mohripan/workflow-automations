@@ -20,9 +20,8 @@ builder.Services.AddScoped<IJobService, JobService>();
 // Add Controllers
 builder.Services.AddControllers();
 
-// Add Swagger
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+// Add OpenAPI
+builder.Services.AddOpenApi();
 
 // Add FluentValidation
 builder.Services.AddFluentValidationAutoValidation();
@@ -54,10 +53,10 @@ using (var scope = app.Services.CreateScope())
 // Middleware
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();
+    app.MapOpenApi();
     app.UseSwaggerUI(c =>
     {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "FlowForge Web API v1");
+        c.SwaggerEndpoint("/openapi/v1.json", "FlowForge Web API v1");
         c.RoutePrefix = "swagger";
     });
 }

@@ -2,13 +2,13 @@
 
 ## Responsibility
 
-The Web API is an **ASP.NET Core 10** application that serves as the central entry point for all user-facing interactions. Its responsibilities are:
+The Web API is an **ASP.NET Core 10** application. Its responsibilities are:
 
-1. Expose REST endpoints for managing Automations, Jobs, Host Groups, and Triggers
-2. Consume `AutomationTriggeredEvent` from Redis Streams → create Jobs in the database → publish `JobCreatedEvent`
-3. Consume `JobStatusChangedEvent` from Redis Streams → update Job status in the database → push real-time updates to the frontend via SignalR
-4. Handle cancel and remove requests for Jobs
-5. Expose webhook endpoints that allow external systems to fire Automation triggers
+1. Expose REST endpoints for Automations, Jobs, Host Groups, Triggers
+2. Consume `AutomationTriggeredEvent` → create Jobs → publish `JobCreatedEvent`
+3. Consume `JobStatusChangedEvent` → update Job status → push SignalR updates to frontend
+4. Handle cancel/remove requests for Jobs
+5. Expose webhook endpoints for external systems to fire Automation triggers
 
 ---
 
@@ -23,25 +23,35 @@ The Web API is an **ASP.NET Core 10** application that serves as the central ent
 | `POST` | `/api/automations` | Create automation |
 | `PUT` | `/api/automations/{id}` | Update automation |
 | `DELETE` | `/api/automations/{id}` | Delete automation |
-| `POST` | `/api/automations/{id}/webhook` | Fire webhook trigger for automation |
+| `PUT` | `/api/automations/{id}/enable` | Enable automation |
+| `PUT` | `/api/automations/{id}/disable` | Disable automation |
+| `POST` | `/api/automations/{id}/webhook` | Fire webhook trigger |
 
 ### Jobs
 
-Jobs are scoped to a `ConnectionId` (e.g. `wf-jobs-minion`) which identifies the host group's database. All job endpoints are prefixed with `{connectionId}`.
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/api/{connectionId}/jobs` | List jobs (filterable) |
+| `GET` | `/api/{connectionId}/jobs/{id}` | Get single job |
+| `POST` | `/api/{connectionId}/jobs/{id}/cancel` | Request cancellation |
+| `DELETE` | `/api/{connectionId}/jobs/{id}` | Remove a pending job |
+
+### Triggers
 
 | Method | Route | Description |
 |---|---|---|
-| `GET` | `/api/{connectionId}/jobs` | List jobs (filterable by status, automationId) |
-| `GET` | `/api/{connectionId}/jobs/{id}` | Get single job |
-| `POST` | `/api/{connectionId}/jobs/{id}/cancel` | Request cancellation of a running job |
-| `DELETE` | `/api/{connectionId}/jobs/{id}` | Remove a pending job (status → Removed) |
+| `GET` | `/api/triggers/types` | List all trigger types with config schemas |
+| `GET` | `/api/triggers/types/{typeId}` | Get schema for one type |
+| `POST` | `/api/triggers/types/{typeId}/validate-config` | Validate a configJson before saving |
+
+See **TRIGGERS.md** for the full `TriggersController` implementation, all built-in descriptors, and the `custom-script` type.
 
 ### Host Groups
 
 | Method | Route | Description |
 |---|---|---|
-| `GET` | `/api/host-groups` | List all host groups |
-| `GET` | `/api/host-groups/{id}` | Get host group with its online hosts |
+| `GET` | `/api/host-groups` | List host groups |
+| `GET` | `/api/host-groups/{id}` | Get host group + online hosts |
 | `POST` | `/api/host-groups` | Create host group |
 | `DELETE` | `/api/host-groups/{id}` | Delete host group |
 
@@ -49,14 +59,8 @@ Jobs are scoped to a `ConnectionId` (e.g. `wf-jobs-minion`) which identifies the
 
 | Method | Route | Description |
 |---|---|---|
-| `GET` | `/api/hosts` | List all registered hosts |
-| `GET` | `/api/hosts/{id}` | Get single host with status |
-
-### Triggers
-
-| Method | Route | Description |
-|---|---|---|
-| `GET` | `/api/triggers/types` | List available trigger types with their config schemas |
+| `GET` | `/api/hosts` | List all hosts |
+| `GET` | `/api/hosts/{id}` | Get single host |
 
 ---
 
@@ -67,26 +71,23 @@ Jobs are scoped to a `ConnectionId` (e.g. `wf-jobs-minion`) which identifies the
 ```csharp
 [ApiController]
 [Route("api/automations")]
-public class AutomationsController(IAutomationService automationService) : ControllerBase
+public class AutomationsController(
+    IAutomationService automationService,
+    ILogger<AutomationsController> logger) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] AutomationQueryParams query, CancellationToken ct)
-    {
-        var result = await automationService.GetAllAsync(query, ct);
-        return Ok(result);
-    }
+        => Ok(await automationService.GetAllAsync(query, ct));
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
-    {
-        var result = await automationService.GetByIdAsync(id, ct);
-        return Ok(result);
-    }
+        => Ok(await automationService.GetByIdAsync(id, ct));
 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateAutomationRequest request, CancellationToken ct)
     {
         var created = await automationService.CreateAsync(request, ct);
+        logger.LogInformation("Automation {AutomationId} ({Name}) created", created.Id, created.Name);
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
     }
 
@@ -94,6 +95,7 @@ public class AutomationsController(IAutomationService automationService) : Contr
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateAutomationRequest request, CancellationToken ct)
     {
         var updated = await automationService.UpdateAsync(id, request, ct);
+        logger.LogInformation("Automation {AutomationId} updated", id);
         return Ok(updated);
     }
 
@@ -101,11 +103,31 @@ public class AutomationsController(IAutomationService automationService) : Contr
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         await automationService.DeleteAsync(id, ct);
+        logger.LogInformation("Automation {AutomationId} deleted", id);
+        return NoContent();
+    }
+
+    [HttpPut("{id:guid}/enable")]
+    public async Task<IActionResult> Enable(Guid id, CancellationToken ct)
+    {
+        await automationService.EnableAsync(id, ct);
+        logger.LogInformation("Automation {AutomationId} enabled", id);
+        return NoContent();
+    }
+
+    [HttpPut("{id:guid}/disable")]
+    public async Task<IActionResult> Disable(Guid id, CancellationToken ct)
+    {
+        await automationService.DisableAsync(id, ct);
+        logger.LogInformation("Automation {AutomationId} disabled", id);
         return NoContent();
     }
 
     [HttpPost("{id:guid}/webhook")]
-    public async Task<IActionResult> FireWebhook(Guid id, [FromHeader(Name = "X-Webhook-Secret")] string? secret, CancellationToken ct)
+    public async Task<IActionResult> FireWebhook(
+        Guid id,
+        [FromHeader(Name = "X-Webhook-Secret")] string? secret,
+        CancellationToken ct)
     {
         await automationService.FireWebhookAsync(id, secret, ct);
         return Accepted();
@@ -115,63 +137,69 @@ public class AutomationsController(IAutomationService automationService) : Contr
 
 ### JobsController
 
-`JobsController` is prefixed with `{connectionId}`. It resolves the correct `IJobRepository` at runtime using .NET Keyed Services — the `connectionId` route segment determines which database to query.
-
 ```csharp
 [ApiController]
 [Route("api/{connectionId}/jobs")]
-public class JobsController(IServiceProvider serviceProvider, IJobService jobService) : ControllerBase
+public class JobsController(
+    IServiceProvider serviceProvider,
+    IJobService jobService,
+    ILogger<JobsController> logger) : ControllerBase
 {
-    // Resolves the IJobRepository keyed to the connectionId from the route
     private IJobRepository GetRepo(string connectionId)
         => serviceProvider.GetRequiredKeyedService<IJobRepository>(connectionId);
 
     [HttpGet]
-    public async Task<IActionResult> GetAll(
-        string connectionId, [FromQuery] JobQueryParams query, CancellationToken ct)
-    {
-        var repo = GetRepo(connectionId);
-        var result = await jobService.GetAllAsync(repo, query, ct);
-        return Ok(result);
-    }
+    public async Task<IActionResult> GetAll(string connectionId, [FromQuery] JobQueryParams query, CancellationToken ct)
+        => Ok(await jobService.GetAllAsync(GetRepo(connectionId), query, ct));
 
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(string connectionId, Guid id, CancellationToken ct)
     {
-        var repo = GetRepo(connectionId);
-        var job  = await repo.GetByIdAsync(id, ct) ?? throw new JobNotFoundException(id);
+        var job = await GetRepo(connectionId).GetByIdAsync(id, ct) ?? throw new JobNotFoundException(id);
         return Ok(JobResponse.From(job));
     }
 
     [HttpPost("{id:guid}/cancel")]
     public async Task<IActionResult> Cancel(string connectionId, Guid id, CancellationToken ct)
     {
-        var repo = GetRepo(connectionId);
-        await jobService.RequestCancelAsync(repo, id, ct);
+        await jobService.RequestCancelAsync(GetRepo(connectionId), id, ct);
+        logger.LogInformation("Cancel requested for job {JobId} (connectionId={ConnectionId})", id, connectionId);
         return Accepted();
     }
 
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Remove(string connectionId, Guid id, CancellationToken ct)
     {
-        var repo = GetRepo(connectionId);
-        await jobService.RemoveAsync(repo, id, ct);
+        await jobService.RemoveAsync(GetRepo(connectionId), id, ct);
+        logger.LogInformation("Job {JobId} removed (connectionId={ConnectionId})", id, connectionId);
         return NoContent();
     }
 }
 ```
 
-> `GetRequiredKeyedService` throws `InvalidOperationException` if the `connectionId` is not registered. `ExceptionHandlingMiddleware` maps this to HTTP 400 with a clear message. Never let it bubble as a 500.
+> `GetRequiredKeyedService` throws `InvalidOperationException` for unregistered `connectionId`. `ExceptionHandlingMiddleware` maps this to HTTP 400.
+
+### TriggersController
+
+See **TRIGGERS.md** for the full implementation. Summary:
+
+```csharp
+[ApiController]
+[Route("api/triggers")]
+public class TriggersController(ITriggerTypeRegistry registry, ILogger<TriggersController> logger)
+    : ControllerBase
+{
+    [HttpGet("types")]                          // list all types + schemas
+    [HttpGet("types/{typeId}")]                 // schema for one type
+    [HttpPost("types/{typeId}/validate-config")] // validate configJson before saving
+}
+```
 
 ---
 
 ## Service Layer
 
-Controllers are thin — business logic lives in service classes.
-
 ### IAutomationService
-
-`AutomationService` is responsible for publishing `AutomationChangedEvent` to `flowforge:automation-changed` after every mutation. This is how `JobAutomator` keeps its in-memory cache current — it has no database access of its own.
 
 ```csharp
 public interface IAutomationService
@@ -181,39 +209,65 @@ public interface IAutomationService
     Task<AutomationResponse> CreateAsync(CreateAutomationRequest request, CancellationToken ct);
     Task<AutomationResponse> UpdateAsync(Guid id, UpdateAutomationRequest request, CancellationToken ct);
     Task DeleteAsync(Guid id, CancellationToken ct);
+    Task EnableAsync(Guid id, CancellationToken ct);
+    Task DisableAsync(Guid id, CancellationToken ct);
     Task FireWebhookAsync(Guid id, string? secret, CancellationToken ct);
-
-    // Used by JobAutomator on startup to seed its cache — not a polling endpoint
     Task<IReadOnlyList<AutomationSnapshot>> GetAllSnapshotsAsync(CancellationToken ct);
 }
 ```
 
-Every mutation method must end with a publish:
+`AutomationService.CreateAsync` calls `_registry.ValidateTriggerConfigs(request.Triggers)` before constructing the domain entity — see **TRIGGERS.md** for the validation helper. Every mutation publishes `AutomationChangedEvent` so `JobAutomator` keeps its cache current.
 
 ```csharp
 // Example: AutomationService.CreateAsync (abbreviated)
 public async Task<AutomationResponse> CreateAsync(CreateAutomationRequest request, CancellationToken ct)
 {
-    var automation = Automation.Create(request.Name, request.HostGroupId, request.TaskId, ...);
+    _logger.LogInformation("Creating automation '{Name}' with {TriggerCount} trigger(s)",
+        request.Name, request.Triggers.Count);
+
+    // 1. Validate each trigger's TypeId is known and configJson is valid
+    ValidateTriggerConfigs(request.Triggers);
+
+    // 2. Build domain entity (throws on invariant violations)
+    var automation = Automation.Create(
+        name:          request.Name,
+        description:   request.Description,
+        hostGroupId:   request.HostGroupId,
+        taskId:        request.TaskId,
+        triggers:      request.Triggers
+                           .Select(t => Trigger.Create(t.Name, t.TypeId, t.ConfigJson))
+                           .ToList(),
+        conditionRoot: MapConditionNode(request.TriggerCondition));
+
     await _automationRepo.SaveAsync(automation, ct);
 
-    // Notify JobAutomator to update its cache
     await _publisher.PublishAsync(new AutomationChangedEvent(
         AutomationId: automation.Id,
         ChangeType:   ChangeType.Created,
         Automation:   AutomationSnapshot.From(automation)
     ), ct);
 
+    _logger.LogInformation("Automation {AutomationId} saved and cache notified", automation.Id);
     return AutomationResponse.From(automation);
 }
 
-// Same pattern for UpdateAsync (ChangeType.Updated) and DeleteAsync (ChangeType.Deleted)
-// On DeleteAsync: Automation field is null, only AutomationId is needed
+private void ValidateTriggerConfigs(IEnumerable<CreateTriggerRequest> triggers)
+{
+    foreach (var t in triggers)
+    {
+        if (!_registry.IsKnown(t.TypeId))
+            throw new InvalidAutomationException(
+                $"Unknown trigger type '{t.TypeId}'. Call GET /api/triggers/types to see available types.");
+
+        var errors = _registry.Get(t.TypeId)!.ValidateConfig(t.ConfigJson);
+        if (errors.Count > 0)
+            throw new InvalidAutomationException(
+                $"Trigger '{t.Name}' (type '{t.TypeId}') has invalid config: {string.Join("; ", errors)}");
+    }
+}
 ```
 
 ### IJobService
-
-`IJobService` receives the already-resolved `IJobRepository` as a parameter — it does not know about `connectionId` directly. This keeps the service layer decoupled from routing concerns.
 
 ```csharp
 public interface IJobService
@@ -225,46 +279,44 @@ public interface IJobService
 }
 ```
 
-### Cancel vs Remove logic
-
 ```csharp
-// JobService.RequestCancelAsync
-public async Task RequestCancelAsync(Guid id, CancellationToken ct)
+// Cancel logic
+public async Task RequestCancelAsync(IJobRepository repo, Guid id, CancellationToken ct)
 {
-    var job = await _jobRepo.GetByIdAsync(id, ct) ?? throw new JobNotFoundException(id);
+    var job = await repo.GetByIdAsync(id, ct) ?? throw new JobNotFoundException(id);
 
     if (job.Status == JobStatus.Pending)
     {
-        // Not yet dispatched — just mark as Removed, no need to signal host
+        _logger.LogInformation("Job {JobId} is Pending — removing without signalling host", id);
         job.Transition(JobStatus.Removed);
-        await _jobRepo.SaveAsync(job, ct);
+        await repo.SaveAsync(job, ct);
         return;
     }
 
     if (!job.Status.IsCancellable())
         throw new InvalidJobTransitionException(job.Status, JobStatus.Cancel);
 
-    // Signal the running host to kill the process
     job.Transition(JobStatus.Cancel);
-    await _jobRepo.SaveAsync(job, ct);
+    await repo.SaveAsync(job, ct);
 
     await _publisher.PublishAsync(new JobCancelRequestedEvent(
         JobId:       job.Id,
         HostId:      job.HostId!.Value,
         RequestedAt: DateTimeOffset.UtcNow
     ), ct);
+
+    _logger.LogInformation("Job {JobId} → Cancel; signal sent to host {HostId}", job.Id, job.HostId);
 }
 
-// JobService.RemoveAsync — only valid for Pending jobs
-public async Task RemoveAsync(Guid id, CancellationToken ct)
+// Remove logic (Pending only)
+public async Task RemoveAsync(IJobRepository repo, Guid id, CancellationToken ct)
 {
-    var job = await _jobRepo.GetByIdAsync(id, ct) ?? throw new JobNotFoundException(id);
-
+    var job = await repo.GetByIdAsync(id, ct) ?? throw new JobNotFoundException(id);
     if (job.Status != JobStatus.Pending)
-        throw new DomainException("Only pending jobs can be removed via DELETE. Use POST /cancel for running jobs.");
-
+        throw new DomainException("Only Pending jobs can be removed via DELETE. Use POST /cancel for running jobs.");
     job.Transition(JobStatus.Removed);
-    await _jobRepo.SaveAsync(job, ct);
+    await repo.SaveAsync(job, ct);
+    _logger.LogInformation("Job {JobId} removed (was Pending)", id);
 }
 ```
 
@@ -272,11 +324,7 @@ public async Task RemoveAsync(Guid id, CancellationToken ct)
 
 ## Background Workers
 
-The Web API hosts two background workers that consume Redis Streams.
-
 ### AutomationTriggeredConsumer
-
-Listens for `AutomationTriggeredEvent`, creates a `Job` in the database, and publishes `JobCreatedEvent`.
 
 ```csharp
 public class AutomationTriggeredConsumer(
@@ -288,32 +336,13 @@ public class AutomationTriggeredConsumer(
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        logger.LogInformation("AutomationTriggeredConsumer started");
+
         await foreach (var @event in consumer.ConsumeAsync<AutomationTriggeredEvent>(
             StreamNames.AutomationTriggered, "webapi", "webapi-1", stoppingToken))
         {
-            try
-            {
-                var automation = await automationRepo.GetByIdAsync(@event.AutomationId, stoppingToken)
-                    ?? throw new AutomationNotFoundException(@event.AutomationId);
-
-                var job = Job.Create(
-                    automationId: automation.Id,
-                    hostGroupId:  automation.HostGroupId,
-                    triggeredAt:  @event.TriggeredAt);
-
-                await jobRepo.SaveAsync(job, stoppingToken);
-
-                await publisher.PublishAsync(new JobCreatedEvent(
-                    JobId:       job.Id,
-                    AutomationId: job.AutomationId,
-                    HostGroupId:  job.HostGroupId,
-                    CreatedAt:    job.CreatedAt
-                ), stoppingToken);
-
-                logger.LogInformation(
-                    "Job {JobId} created for automation {AutomationId}",
-                    job.Id, automation.Id);
-            }
+            try { await HandleEventAsync(@event, stoppingToken); }
+            catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
                 logger.LogError(ex,
@@ -322,53 +351,98 @@ public class AutomationTriggeredConsumer(
             }
         }
     }
+
+    private async Task HandleEventAsync(AutomationTriggeredEvent @event, CancellationToken ct)
+    {
+        // Re-check IsEnabled — automation may have been disabled between firing and now
+        var automation = await automationRepo.GetByIdAsync(@event.AutomationId, ct)
+            ?? throw new AutomationNotFoundException(@event.AutomationId);
+
+        if (!automation.IsEnabled)
+        {
+            logger.LogInformation(
+                "Automation {AutomationId} is disabled — discarding triggered event",
+                @event.AutomationId);
+            return;
+        }
+
+        var job = Job.Create(
+            automationId: automation.Id,
+            hostGroupId:  automation.HostGroupId,
+            taskId:       automation.TaskId,
+            connectionId: @event.ConnectionId,
+            triggeredAt:  @event.TriggeredAt);
+
+        await jobRepo.SaveAsync(job, ct);
+
+        await publisher.PublishAsync(new JobCreatedEvent(
+            JobId:        job.Id,
+            AutomationId: job.AutomationId,
+            HostGroupId:  job.HostGroupId,
+            ConnectionId: @event.ConnectionId,
+            CreatedAt:    job.CreatedAt
+        ), ct);
+
+        logger.LogInformation(
+            "Job {JobId} created for automation {AutomationId} (connectionId={ConnectionId})",
+            job.Id, automation.Id, @event.ConnectionId);
+    }
 }
 ```
 
 ### JobStatusChangedConsumer
 
-Listens for `JobStatusChangedEvent`, updates Job status in the database, and pushes the update to the frontend via SignalR.
-
 ```csharp
 public class JobStatusChangedConsumer(
     IMessageConsumer consumer,
-    IJobRepository jobRepo,
+    IServiceProvider serviceProvider,
     IHubContext<JobStatusHub, IJobStatusClient> hubContext,
     ILogger<JobStatusChangedConsumer> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        logger.LogInformation("JobStatusChangedConsumer started");
+
         await foreach (var @event in consumer.ConsumeAsync<JobStatusChangedEvent>(
             StreamNames.JobStatusChanged, "webapi", "webapi-1", stoppingToken))
         {
-            try
-            {
-                var job = await jobRepo.GetByIdAsync(@event.JobId, stoppingToken);
-                if (job is null)
-                {
-                    logger.LogWarning("Received status change for unknown job {JobId}", @event.JobId);
-                    continue;
-                }
-
-                job.Transition(@event.Status);
-                if (@event.Message is not null) job.SetMessage(@event.Message);
-                await jobRepo.SaveAsync(job, stoppingToken);
-
-                // Push to all frontend clients subscribed to this job
-                await hubContext.Clients
-                    .Group($"job:{job.Id}")
-                    .OnJobStatusChanged(new JobStatusUpdate(
-                        JobId:     job.Id,
-                        Status:    job.Status,
-                        Message:   job.Message,
-                        UpdatedAt: @event.UpdatedAt));
-            }
+            try { await HandleEventAsync(@event, stoppingToken); }
+            catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
                 logger.LogError(ex,
                     "Failed to process JobStatusChangedEvent for job {JobId}", @event.JobId);
             }
         }
+    }
+
+    private async Task HandleEventAsync(JobStatusChangedEvent @event, CancellationToken ct)
+    {
+        // Resolve correct job repo by ConnectionId carried in the event
+        var repo = serviceProvider.GetRequiredKeyedService<IJobRepository>(@event.ConnectionId);
+        var job  = await repo.GetByIdAsync(@event.JobId, ct);
+
+        if (job is null)
+        {
+            logger.LogWarning(
+                "Status change for unknown job {JobId} (connectionId={ConnectionId})",
+                @event.JobId, @event.ConnectionId);
+            return;
+        }
+
+        job.Transition(@event.Status);
+        if (@event.Message is not null) job.SetMessage(@event.Message);
+        await repo.SaveAsync(job, ct);
+
+        logger.LogInformation("Job {JobId} → {Status}", job.Id, job.Status);
+
+        await hubContext.Clients
+            .Group($"job:{job.Id}")
+            .OnJobStatusChanged(new JobStatusUpdate(
+                JobId:     job.Id,
+                Status:    job.Status,
+                Message:   job.Message,
+                UpdatedAt: @event.UpdatedAt));
     }
 }
 ```
@@ -377,10 +451,7 @@ public class JobStatusChangedConsumer(
 
 ## SignalR Hub
 
-SignalR is used **exclusively for frontend real-time updates**. Service-to-service communication never goes through SignalR.
-
 ```csharp
-// Hub interface (strongly typed)
 public interface IJobStatusClient
 {
     Task OnJobStatusChanged(JobStatusUpdate update);
@@ -388,7 +459,6 @@ public interface IJobStatusClient
 
 public class JobStatusHub : Hub<IJobStatusClient>
 {
-    // Frontend subscribes to updates for a specific job
     public async Task SubscribeToJob(Guid jobId)
         => await Groups.AddToGroupAsync(Context.ConnectionId, $"job:{jobId}");
 
@@ -396,8 +466,6 @@ public class JobStatusHub : Hub<IJobStatusClient>
         => await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"job:{jobId}");
 }
 ```
-
-Frontend connects to `/hubs/job-status` and calls `SubscribeToJob(jobId)` after loading a job detail view.
 
 ---
 
@@ -407,24 +475,69 @@ Frontend connects to `/hubs/job-status` and calls `SubscribeToJob(jobId)` after 
 
 ```csharp
 public record CreateAutomationRequest(
-    string                   Name,
-    string?                  Description,
-    Guid                     HostGroupId,
+    string                        Name,
+    string?                       Description,
+    Guid                          HostGroupId,
+    string                        TaskId,
     List<CreateTriggerRequest>    Triggers,
-    TriggerConditionRequest  TriggerCondition
+    TriggerConditionRequest       TriggerCondition
 );
 
 public record CreateTriggerRequest(
-    TriggerType TriggerType,
-    string      ConfigJson      // serialized trigger-type-specific config
+    string  Name,       // unique within this automation — used in condition expressions
+    string  TypeId,     // e.g. "schedule", "sql", "custom-script" — call GET /api/triggers/types
+    string  ConfigJson  // type-specific JSON — use POST /api/triggers/types/{typeId}/validate-config first
 );
 
 public record TriggerConditionRequest(
-    ConditionOperator?               Operator,   // null if single trigger (leaf node)
-    Guid?                            TriggerId,  // set if leaf node
-    List<TriggerConditionRequest>?   Nodes       // set if composite node
+    ConditionOperator?                Operator,
+    string?                           TriggerName,  // matches a Name in Triggers list
+    List<TriggerConditionRequest>?    Nodes
 );
 ```
+
+**Example request:**
+```json
+{
+  "name": "Nightly ETL after API ready",
+  "hostGroupId": "00000000-0000-0000-0000-000000000001",
+  "taskId": "run-script",
+  "triggers": [
+    {
+      "name": "daily-schedule",
+      "typeId": "schedule",
+      "configJson": "{\"cronExpression\":\"0 0 2 * * ?\"}"
+    },
+    {
+      "name": "api-ready-check",
+      "typeId": "custom-script",
+      "configJson": "{\"scriptContent\":\"import requests\\nresp = requests.get('https://api.example.com/ready')\\nprint('true' if resp.ok else 'false')\",\"pollingIntervalSeconds\":60,\"timeoutSeconds\":10}"
+    }
+  ],
+  "triggerCondition": {
+    "operator": "And",
+    "nodes": [
+      { "triggerName": "daily-schedule" },
+      { "triggerName": "api-ready-check" }
+    ]
+  }
+}
+```
+
+### UpdateAutomationRequest
+
+```csharp
+public record UpdateAutomationRequest(
+    string                        Name,
+    string?                       Description,
+    Guid                          HostGroupId,
+    string                        TaskId,
+    List<CreateTriggerRequest>    Triggers,
+    TriggerConditionRequest       TriggerCondition
+);
+```
+
+> `IsEnabled` is **not** part of `UpdateAutomationRequest`. Use the dedicated `PUT /enable` and `PUT /disable` endpoints.
 
 ### AutomationResponse
 
@@ -434,10 +547,25 @@ public record AutomationResponse(
     string                       Name,
     string?                      Description,
     Guid                         HostGroupId,
+    string                       TaskId,
+    bool                         IsEnabled,
     List<TriggerResponse>        Triggers,
     TriggerConditionResponse     TriggerCondition,
     DateTimeOffset               CreatedAt,
     DateTimeOffset               UpdatedAt
+);
+
+public record TriggerResponse(
+    Guid    Id,
+    string  Name,
+    string  TypeId,     // e.g. "schedule", "custom-script"
+    string  ConfigJson
+);
+
+public record TriggerConditionResponse(
+    ConditionOperator?                Operator,
+    string?                           TriggerName,
+    List<TriggerConditionResponse>?   Nodes
 );
 ```
 
@@ -457,7 +585,7 @@ public record JobResponse(
 );
 ```
 
-### JobStatusUpdate (SignalR payload)
+### JobStatusUpdate (SignalR)
 
 ```csharp
 public record JobStatusUpdate(
@@ -472,81 +600,96 @@ public record JobStatusUpdate(
 
 ## Validation
 
-Use `FluentValidation` for all request DTOs. Validators are registered automatically and run as part of the request pipeline before reaching the controller.
-
 ```csharp
 public class CreateAutomationRequestValidator : AbstractValidator<CreateAutomationRequest>
 {
     public CreateAutomationRequestValidator()
     {
-        RuleFor(x => x.Name)
-            .NotEmpty()
-            .MaximumLength(200);
-
-        RuleFor(x => x.HostGroupId)
-            .NotEmpty();
+        RuleFor(x => x.Name).NotEmpty().MaximumLength(200);
+        RuleFor(x => x.HostGroupId).NotEmpty();
+        RuleFor(x => x.TaskId).NotEmpty();
 
         RuleFor(x => x.Triggers)
             .NotEmpty()
-            .WithMessage("At least one trigger is required");
+            .WithMessage("At least one trigger is required.");
 
+        // Each trigger must have a non-empty unique name and a non-empty TypeId
+        RuleForEach(x => x.Triggers).ChildRules(trigger =>
+        {
+            trigger.RuleFor(t => t.Name)
+                .NotEmpty().MaximumLength(100)
+                .WithMessage("Each trigger must have a non-empty name (max 100 chars).");
+            trigger.RuleFor(t => t.TypeId)
+                .NotEmpty()
+                .WithMessage("Each trigger must have a non-empty TypeId. Call GET /api/triggers/types.");
+        });
+
+        // Trigger names must be unique within the automation
+        RuleFor(x => x.Triggers)
+            .Must(triggers =>
+                triggers.Select(t => t.Name).Distinct(StringComparer.Ordinal).Count() == triggers.Count)
+            .WithMessage("Trigger names must be unique within an automation.");
+
+        // TriggerCondition is required
         RuleFor(x => x.TriggerCondition)
-            .NotNull();
+            .NotNull()
+            .WithMessage("TriggerCondition is required. " +
+                         "For a single trigger, use: { \"triggerName\": \"your-trigger-name\" }.");
+
+        // All TriggerNames in the condition tree must match a trigger in the Triggers list
+        RuleFor(x => x)
+            .Must(req => req.TriggerCondition == null ||
+                         AllConditionNamesExist(
+                             req.TriggerCondition,
+                             req.Triggers.Select(t => t.Name).ToHashSet(StringComparer.Ordinal)))
+            .WithMessage("TriggerCondition references a TriggerName not present in the Triggers list.")
+            .When(x => x.Triggers.Count > 0 && x.TriggerCondition is not null);
+    }
+
+    private static bool AllConditionNamesExist(TriggerConditionRequest node, HashSet<string> knownNames)
+    {
+        if (node.TriggerName is not null) return knownNames.Contains(node.TriggerName);
+        return node.Nodes?.All(n => AllConditionNamesExist(n, knownNames)) ?? true;
     }
 }
 ```
 
-Register in `Program.cs`:
-
-```csharp
-builder.Services
-    .AddFluentValidationAutoValidation()
-    .AddValidatorsFromAssemblyContaining<CreateAutomationRequestValidator>();
-```
+> `TypeId` validity and `configJson` correctness are validated in `AutomationService.ValidateTriggerConfigs` (service layer), not in the FluentValidation validator. FluentValidation runs before the service; the service provides better error messages for type-specific config errors.
 
 ---
 
 ## Exception Handling Middleware
 
-Maps domain and infrastructure exceptions to appropriate HTTP responses. Registered as the first middleware in the pipeline.
-
 ```csharp
 public class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<ExceptionHandlingMiddleware> logger)
 {
-    public async Task InvokeAsync(HttpContext context)
-    {
-        try
-        {
-            await next(context);
-        }
-        catch (Exception ex)
-        {
-            await HandleExceptionAsync(context, ex);
-        }
-    }
-
     private async Task HandleExceptionAsync(HttpContext context, Exception ex)
     {
         var (statusCode, title) = ex switch
         {
             JobNotFoundException or AutomationNotFoundException
-                => (StatusCodes.Status404NotFound, "Resource not found"),
+                => (404, "Resource not found"),
 
-            InvalidJobTransitionException or DomainException
-                => (StatusCodes.Status422UnprocessableEntity, "Business rule violation"),
+            InvalidJobTransitionException or InvalidAutomationException
+            or InvalidTriggerConditionException or DomainException
+                => (422, "Business rule violation"),
+
+            InvalidOperationException when ex.Message.Contains("No service")
+                => (400, "Unknown connection ID"),
 
             ValidationException
-                => (StatusCodes.Status400BadRequest, "Validation failed"),
+                => (400, "Validation failed"),
 
-            _ => (StatusCodes.Status500InternalServerError, "An unexpected error occurred")
+            _ => (500, "An unexpected error occurred")
         };
 
-        if (statusCode == StatusCodes.Status500InternalServerError)
+        if (statusCode == 500)
             logger.LogError(ex, "Unhandled exception");
+        else
+            logger.LogWarning(ex, "Request failed: {StatusCode} {Title}", statusCode, title);
 
         context.Response.StatusCode = statusCode;
         context.Response.ContentType = "application/problem+json";
-
         await context.Response.WriteAsJsonAsync(new ProblemDetails
         {
             Title  = title,
@@ -561,40 +704,14 @@ public class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Exception
 
 ## Webhook Flow
 
-When an external system fires the webhook endpoint:
-
 ```
-POST /api/automations/{id}/webhook
-Header: X-Webhook-Secret: <secret>
+POST /api/automations/{id}/webhook   Header: X-Webhook-Secret: <secret>
 
-1. AutomationService validates the secret against the stored hash
-2. Sets Redis flag: trigger:webhook:{triggerId}:fired = 1 (TTL 10 min)
-3. Returns 202 Accepted immediately
-4. JobAutomator reads the flag on its next evaluation pass
-```
-
-```csharp
-public async Task FireWebhookAsync(Guid automationId, string? secret, CancellationToken ct)
-{
-    var automation = await _automationRepo.GetByIdAsync(automationId, ct)
-        ?? throw new AutomationNotFoundException(automationId);
-
-    var webhookTrigger = automation.Triggers.FirstOrDefault(t => t.Type == TriggerType.Webhook)
-        ?? throw new DomainException("Automation does not have a webhook trigger");
-
-    var config = JsonSerializer.Deserialize<WebhookTriggerConfig>(webhookTrigger.ConfigJson)!;
-
-    if (config.SecretHash is not null)
-    {
-        if (secret is null || !VerifySecret(secret, config.SecretHash))
-            throw new UnauthorizedWebhookException(automationId);
-    }
-
-    await _redis.SetAsync(
-        key:    $"trigger:webhook:{webhookTrigger.Id}:fired",
-        value:  "1",
-        expiry: TimeSpan.FromMinutes(10));
-}
+1. Verify automation exists and IsEnabled (returns 422 if disabled)
+2. Validate webhook secret
+3. Set Redis flag: trigger:webhook:{triggerId}:fired = 1 (TTL 10 min)
+4. Return 202 Accepted
+5. JobAutomator reads the flag on next evaluation pass
 ```
 
 ---
@@ -604,7 +721,7 @@ public async Task FireWebhookAsync(Guid automationId, string? secret, Cancellati
 ```json
 {
   "ConnectionStrings": {
-    "DefaultConnection": "Host=postgres;Database=flowforge;Username=flowforge;Password=..."
+    "DefaultConnection": "Host=postgres;Database=flowforge;..."
   },
   "Redis": {
     "ConnectionString": "redis:6379"
@@ -612,9 +729,7 @@ public async Task FireWebhookAsync(Guid automationId, string? secret, Cancellati
   "SignalR": {
     "HubPath": "/hubs/job-status"
   },
-  "AllowedOrigins": [
-    "http://localhost:3000"
-  ]
+  "AllowedOrigins": ["http://localhost:3000"]
 }
 ```
 
@@ -623,10 +738,8 @@ public async Task FireWebhookAsync(Guid automationId, string? secret, Cancellati
 ## DI Registration (Program.cs sketch)
 
 ```csharp
-var builder = WebApplication.CreateBuilder(args);
-
 builder.Services
-    .AddInfrastructure(builder.Configuration)
+    .AddInfrastructure(builder.Configuration)  // registers ITriggerTypeRegistry + all descriptors
     .AddControllers();
 
 builder.Services
@@ -637,26 +750,20 @@ builder.Services
     .AddScoped<IAutomationService, AutomationService>()
     .AddScoped<IJobService, JobService>();
 
-builder.Services
-    .AddSignalR();
+builder.Services.AddSignalR();
 
 builder.Services
     .AddHostedService<AutomationTriggeredConsumer>()
     .AddHostedService<JobStatusChangedConsumer>();
 
-builder.Services
-    .AddCors(options => options.AddDefaultPolicy(policy =>
-        policy.WithOrigins(builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()!)
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials()));   // required for SignalR
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
+    policy.WithOrigins(builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()!)
+          .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
 
 var app = builder.Build();
-
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseCors();
 app.MapControllers();
 app.MapHub<JobStatusHub>("/hubs/job-status");
-
 app.Run();
 ```

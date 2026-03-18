@@ -45,51 +45,101 @@ The system allows users to define **Automations** — combinations of triggers a
 ## Core Concepts
 
 ### Automation
+
 User-defined entity that ties together:
-- One or more **Triggers** (schedule, SQL, job-completed, webhook)
-- **Trigger Conditions** — logical expression using AND/OR and parentheses
-- A **Host Group** — determines which pool of hosts will run the resulting job
-- A **TaskId** — identifies which workflow handler the resulting job will execute
+- One or more **Triggers** — **at least one required**
+- **Trigger Conditions** — logical AND/OR expression referencing triggers by `Name` — **required; must not be null**
+- A **Host Group** — determines which pool of hosts runs the resulting job
+- A **TaskId** — identifies which workflow handler executes the job
+- An **IsEnabled** flag — when `false`, no jobs are created regardless of trigger state
+
+**Domain invariants enforced on `Automation`:**
+1. `Triggers` must contain at least one entry.
+2. `ConditionRoot` must not be null.
+3. Every `TriggerName` referenced in the condition tree must match the `Name` of an existing trigger on the same automation.
+4. A disabled automation never causes a job to be created.
+
+### Trigger
+
+A Trigger belongs to one Automation. Key fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `Id` | `Guid` | Database PK — used for internal Redis key generation |
+| `Name` | `string` | User-assigned label, **unique within the Automation** — used in condition expressions |
+| `TypeId` | `string` | Matches a constant in `TriggerTypes` (e.g. `"schedule"`, `"custom-script"`) |
+| `ConfigJson` | `string` | Type-specific JSON config |
+
+**There is no `TriggerType` enum.** `TypeId` is a plain string. Built-in type IDs are string constants in `TriggerTypes`:
+
+```csharp
+public static class TriggerTypes
+{
+    public const string Schedule     = "schedule";
+    public const string Sql          = "sql";
+    public const string JobCompleted = "job-completed";
+    public const string Webhook      = "webhook";
+    public const string CustomScript = "custom-script";
+}
+```
+
+This design makes the type system open: new types require no enum changes, no code recompilation for the trigger discovery endpoints.
+
+### Trigger Type System
+
+Each `TypeId` has a corresponding **`ITriggerTypeDescriptor`** that self-describes:
+- A **config schema** (`TriggerConfigSchema`) — list of `ConfigField` records with name, label, data type, required flag, description, and default value. Used by the frontend to render the correct form.
+- A **`ValidateConfig(configJson)`** method — called by the API before saving a trigger to the database.
+
+See **TRIGGERS.md** for full details on all built-in descriptors and the `custom-script` type.
+
+### Custom Script Trigger
+
+Users who need a trigger condition beyond the built-ins (schedule, SQL, job-completed, webhook) can use **`custom-script`**: a built-in trigger type where the user provides a Python 3 script inside the `ConfigJson`. FlowForge runs the script on a polling interval in a sandboxed subprocess. The trigger fires when the script exits with code 0 and prints `"true"` to stdout.
+
+This handles scenarios like:
+- Checking an external REST API response
+- Reading from a file, S3 bucket, or message queue not covered by SQL
+- Combining multiple data sources in custom logic
+
+### Trigger Condition
+
+A recursive AND/OR tree where leaf nodes reference a `TriggerName`. Required; must not be null.
+
+Leaf node example: `{ "triggerName": "daily-schedule" }`
+
+Composite node example:
+```json
+{
+  "operator": "And",
+  "nodes": [
+    { "triggerName": "daily-schedule" },
+    { "triggerName": "etl-ready" }
+  ]
+}
+```
 
 ### Job
-A unit of work created when an Automation's trigger conditions are met.
-- Always belongs to one Automation
-- Carries a `TaskId` (inherited from the Automation) that determines what the job executes
-- Has a `HostGroupId` and (after assignment) a `HostId`
-- Stored in the **database belonging to its Host Group** (see Host Group below)
-- Progresses through a well-defined status lifecycle
+
+A unit of work created when an Automation's trigger conditions are met **and the automation is enabled**.
 
 ### Job Status Lifecycle
+
 ```
 Pending → Started → InProgress → Completed
                               └→ Error
                               └→ CompletedUnsuccessfully
        └→ Removed
-       (from any active state, via cancel request)
        → Cancel → Cancelled
 ```
 
 ### Host Group
-A named group of Workflow Host instances. Each host group has:
-- Its own **dedicated database** (connection string identified by `ConnectionId`, e.g. `wf-jobs-minion`)
-- A pool of hosts load-balanced via round-robin for job dispatch
-- Jobs are stored in and queried from the host group's own database
 
-This allows host groups to use different database providers, be on separate servers, and scale independently. For example:
-- `minion` group → lightweight jobs → PostgreSQL on a small server
-- `titan` group → long-running jobs → PostgreSQL on a dedicated server
-
-Automations are stored in a single **platform database**, separate from all host group databases, because they are definitions rather than execution data.
+A named group of Workflow Host instances with its own dedicated database (`ConnectionId`). Jobs are stored in and queried from the host group's own database.
 
 ### TaskId
-A string identifier on both Automation and Job that determines which **Workflow Handler** executes the job. The Workflow Engine resolves this at runtime via a `WorkflowHandlerRegistry`.
 
-Built-in handler types:
-- `send-email` — sends an email via SMTP/SendGrid
-- `http-request` — makes an outbound HTTP call
-- `run-script` — executes a Python, JavaScript, or shell script (sandboxed)
-
-Custom handlers can be added by implementing `IWorkflowHandler` and registering it, or by using `run-script` with a custom script file — no DLL compilation required.
+A string identifier on both Automation and Job determining which **Workflow Handler** the engine executes.
 
 ---
 
@@ -114,13 +164,13 @@ Custom handlers can be added by implementing `IWorkflowHandler` and registering 
 |---|---|---|
 | Trigger evaluation | Short-poll Web API every N seconds | Event-driven via Redis Streams |
 | Job status updates | Workflow Engine polls Web API | Publish event to stream |
-| Heartbeat | HTTP call to Web API every 5s | Redis key with TTL (no API hop) |
-| Process kill | Windows Job Object only | Abstracted `IProcessManager` (Docker-native + Linux fallback) |
-| Custom triggers | Compile DLL, drop in folder | Webhook trigger + `run-script` handler |
-| Custom workflows | Compile DLL, reflection on namespace | `IWorkflowHandler` registry + `run-script` |
-| Job storage | Shared database for all jobs | Per-host-group database via `ConnectionId` |
-| DB provider flexibility | Single shared provider | Keyed Services — per-group provider config |
-| Host discovery | SignalR hub connection tracking | Redis-registered host records |
+| Heartbeat | HTTP call to Web API every 5s | Redis key with TTL |
+| Process kill | Windows Job Object only | Abstracted `IProcessManager` |
+| Custom triggers | Compile DLL, drop in folder | `custom-script` trigger type — Python inline |
+| Trigger discovery | Hardcoded in frontend | `GET /api/triggers/types` — schema-driven |
+| Condition authoring | TriggerId GUIDs in expressions | Human-readable TriggerName strings |
+| Automation toggle | No enable/disable concept | `IsEnabled`; dedicated endpoints |
+| Job storage | Shared database | Per-host-group database via `ConnectionId` |
 | Deployment | Windows Server on-prem | Docker + Kubernetes |
 
 ---
@@ -129,6 +179,7 @@ Custom handlers can be added by implementing `IWorkflowHandler` and registering 
 
 See **SPECS.md** for the full solution/project structure.
 See **CONVENTIONS.md** for coding standards, DDD rules, and shared patterns.
+See **TRIGGERS.md** for the trigger type system, config schemas, custom-script evaluator, and `TriggersController`.
 
 Per-service deep dives:
 - **WEBAPI.md** — REST endpoints, background consumers, SignalR hub, webhook flow
@@ -144,12 +195,13 @@ Per-service deep dives:
 ### Prerequisites
 - .NET 10 SDK
 - Docker Desktop
-- `make` (optional, for convenience commands)
+- Python 3 (only needed locally if running `custom-script` triggers outside Docker)
 
 ### Run Everything Locally
+
 ```bash
 cd deploy/docker
-docker compose up -d          # starts Redis + PostgreSQL
+docker compose up -d
 dotnet run --project src/services/FlowForge.WebApi
 dotnet run --project src/services/FlowForge.JobAutomator
 dotnet run --project src/services/FlowForge.JobOrchestrator
@@ -157,6 +209,7 @@ dotnet run --project src/services/FlowForge.WorkflowHost
 ```
 
 ### Run Tests
+
 ```bash
 dotnet test
 ```
@@ -164,7 +217,7 @@ dotnet test
 ---
 
 ## Out of Scope (for now)
-- Frontend UI (API-first, can be added later)
-- Auth Server / OAuth2 (placeholder structure exists, not implemented)
+- Frontend UI (API-first)
+- Auth Server / OAuth2
 - Multi-tenancy
-- Custom plugin triggers beyond the built-in types
+- Reusable named custom trigger definitions (saved scripts shared across automations)

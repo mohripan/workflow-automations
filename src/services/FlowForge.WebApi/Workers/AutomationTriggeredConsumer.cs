@@ -11,7 +11,6 @@ public class AutomationTriggeredConsumer(
     IMessageConsumer consumer,
     IMessagePublisher publisher,
     IServiceScopeFactory scopeFactory,
-    IServiceProvider serviceProvider,
     ILogger<AutomationTriggeredConsumer> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -31,7 +30,7 @@ public class AutomationTriggeredConsumer(
                 var hostGroup = await hostGroupRepo.GetByIdAsync(automation.HostGroupId, stoppingToken)
                     ?? throw new DomainException($"Host group {automation.HostGroupId} not found");
 
-                var jobRepo = serviceProvider.GetRequiredKeyedService<IJobRepository>(hostGroup.ConnectionId);
+                var jobRepo = scope.ServiceProvider.GetRequiredKeyedService<IJobRepository>(hostGroup.ConnectionId);
 
                 var job = Job.Create(
                     automationId: automation.Id,

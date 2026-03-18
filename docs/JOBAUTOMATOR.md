@@ -4,20 +4,16 @@
 
 The Job Automator is a **Worker Service** that evaluates Automation trigger conditions and publishes `AutomationTriggeredEvent` when conditions are met.
 
-**This service has no database access.** It operates entirely from an in-memory cache of Automations that is populated on startup and kept current via a Redis Stream. The database is owned by Web API — JobAutomator is a pure consumer of data, not a direct reader of it.
+**This service has no database access.** It operates entirely from an in-memory cache of Automations populated on startup and kept current via a Redis Stream.
 
 ---
 
 ## Why No Direct DB Access?
 
-The legacy approach (polling the Web API every 60 seconds, or reading DB directly) has two problems:
+- **Polling the API** — creates unnecessary load, staleness, and tight coupling.
+- **Reading the DB directly** — breaks the ownership boundary; the Web API is the single source of truth.
 
-- **Polling the API** — creates unnecessary load, introduces up-to-60-second staleness, and creates tight coupling between two services at the HTTP level.
-- **Reading the DB directly** — breaks the ownership boundary. If the Automation schema changes, JobAutomator silently breaks. The Web API is the single source of truth for Automation data.
-
-**The solution: event-driven in-memory cache.**
-
-JobAutomator initialises its cache from the API once on startup, then subscribes to a Redis Stream for all subsequent changes. The cache is always within milliseconds of the Web API's state — with zero polling.
+**Solution: event-driven in-memory cache.** Seeded once from the API on startup, then kept current by a Redis Stream subscription.
 
 ---
 
@@ -32,18 +28,19 @@ JobAutomator initialises its cache from the API once on startup, then subscribes
 │                                                               │
 │  AutomationCacheSyncWorker        AutomationWorker            │
 │  ──────────────────────────       ───────────────────────     │
-│  Subscribe to                     For each automation         │
+│  Subscribe to                     For each ENABLED automation │
 │  automation-changed stream        in AutomationCache:         │
 │       ↓                            evaluate triggers          │
 │  Update AutomationCache            check condition tree       │
 │  (create / update / delete)        if met → publish event     │
 │                                                               │
-│  TriggerEvaluators (per type)                                 │
+│  TriggerEvaluators (per TypeId)                               │
 │  ─────────────────────────────                                │
-│  Schedule  → Quartz.NET fires → sets Redis flag               │
-│  SQL       → polls external DB (not FlowForge DB)             │
-│  JobCompleted → consumes job-status-changed stream            │
-│  Webhook   → reads Redis flag set by Web API                  │
+│  "schedule"      → Quartz.NET fires → sets Redis flag         │
+│  "sql"           → polls external DB                          │
+│  "job-completed" → consumes job-status-changed stream         │
+│  "webhook"       → reads Redis flag set by Web API            │
+│  "custom-script" → runs Python subprocess on polling interval │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -52,8 +49,6 @@ JobAutomator initialises its cache from the API once on startup, then subscribes
 ## Automation Cache
 
 ### AutomationCache
-
-A thread-safe in-memory store of all active Automations. This is the only data source the trigger evaluators and condition evaluator operate against.
 
 ```csharp
 public sealed class AutomationCache
@@ -67,36 +62,31 @@ public sealed class AutomationCache
             _automations[a.Id] = a;
     }
 
-    public void Upsert(AutomationSnapshot automation)
-        => _automations[automation.Id] = automation;
-
-    public void Remove(Guid automationId)
-        => _automations.TryRemove(automationId, out _);
-
-    public IReadOnlyList<AutomationSnapshot> GetAll()
-        => [.. _automations.Values];
+    public void Upsert(AutomationSnapshot automation) => _automations[automation.Id] = automation;
+    public void Remove(Guid automationId) => _automations.TryRemove(automationId, out _);
+    public IReadOnlyList<AutomationSnapshot> GetAll() => [.. _automations.Values];
 }
 ```
 
 ### AutomationSnapshot
 
-A lightweight, immutable representation of an Automation — only the fields JobAutomator needs. Not a domain entity, not a DB model.
-
 ```csharp
 public record AutomationSnapshot(
-    Guid                        Id,
-    bool                        IsActive,
-    Guid                        HostGroupId,
-    string                      ConnectionId,
-    string                      TaskId,
+    Guid                             Id,
+    string                           Name,
+    bool                             IsEnabled,
+    Guid                             HostGroupId,
+    string                           ConnectionId,
+    string                           TaskId,
     IReadOnlyList<TriggerSnapshot>   Triggers,
-    TriggerConditionNode        ConditionRoot
+    TriggerConditionNode             ConditionRoot   // never null
 );
 
 public record TriggerSnapshot(
-    Guid        Id,
-    TriggerType Type,
-    string      ConfigJson
+    Guid    Id,       // used for Redis key generation (internal)
+    string  Name,     // used in condition expressions
+    string  TypeId,   // e.g. "schedule", "custom-script" — matches TriggerTypes constants
+    string  ConfigJson
 );
 ```
 
@@ -104,10 +94,7 @@ public record TriggerSnapshot(
 
 ## Startup: One-Time HTTP Snapshot
 
-On startup, JobAutomator calls `GET /api/automations?includeAll=true` once to seed the cache. This is **not polling** — it is a single initialisation call.
-
 ```csharp
-// In Program.cs (or a startup IHostedService that runs before AutomationWorker)
 public class AutomationCacheInitializer(
     IAutomationApiClient apiClient,
     AutomationCache cache,
@@ -116,278 +103,380 @@ public class AutomationCacheInitializer(
     public async Task StartAsync(CancellationToken ct)
     {
         logger.LogInformation("Seeding automation cache from Web API...");
-        var automations = await apiClient.GetAllAsync(ct);
-        cache.Seed(automations);
-        logger.LogInformation("Automation cache seeded with {Count} automations", automations.Count);
+        try
+        {
+            var automations = await apiClient.GetAllAsync(ct);
+            cache.Seed(automations);
+            logger.LogInformation(
+                "Automation cache seeded with {Count} automations ({EnabledCount} enabled)",
+                automations.Count, automations.Count(a => a.IsEnabled));
+        }
+        catch (Exception ex)
+        {
+            logger.LogCritical(ex, "Failed to seed automation cache. Service cannot start.");
+            throw;
+        }
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
 }
 ```
 
-### IAutomationApiClient
-
-A typed HTTP client — the only external dependency this service has on the Web API:
-
-```csharp
-public interface IAutomationApiClient
-{
-    Task<IReadOnlyList<AutomationSnapshot>> GetAllAsync(CancellationToken ct);
-}
-
-// Registered with IHttpClientFactory:
-// builder.Services.AddHttpClient<IAutomationApiClient, AutomationApiClient>(client =>
-//     client.BaseAddress = new Uri(config["WebApi:BaseUrl"]!));
-```
-
 ---
 
 ## AutomationCacheSyncWorker
 
-Subscribes to `flowforge:automation-changed` stream and keeps the in-memory cache current. Web API publishes to this stream whenever an Automation is created, updated, or deleted.
+Subscribes to `flowforge:automation-changed` and keeps the in-memory cache current.
 
 ```csharp
 public class AutomationCacheSyncWorker(
     IMessageConsumer consumer,
     AutomationCache cache,
+    QuartzScheduleSync quartzSync,
     ILogger<AutomationCacheSyncWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        logger.LogInformation("AutomationCacheSyncWorker started");
+
         await foreach (var @event in consumer.ConsumeAsync<AutomationChangedEvent>(
             StreamNames.AutomationChanged,
             consumerGroup: "job-automator",
             consumerName:  "automator-cache-sync",
             ct:            stoppingToken))
         {
-            switch (@event.ChangeType)
+            try { await HandleEventAsync(@event, stoppingToken); }
+            catch (Exception ex)
             {
-                case ChangeType.Created or ChangeType.Updated:
-                    cache.Upsert(@event.Automation!);
-                    logger.LogDebug(
-                        "Cache updated for automation {AutomationId} ({ChangeType})",
-                        @event.AutomationId, @event.ChangeType);
-                    break;
-
-                case ChangeType.Deleted:
-                    cache.Remove(@event.AutomationId);
-                    logger.LogDebug("Cache removed automation {AutomationId}", @event.AutomationId);
-                    break;
+                logger.LogError(ex,
+                    "Failed to process AutomationChangedEvent for automation {AutomationId}",
+                    @event.AutomationId);
             }
+        }
+    }
+
+    private async Task HandleEventAsync(AutomationChangedEvent @event, CancellationToken ct)
+    {
+        switch (@event.ChangeType)
+        {
+            case ChangeType.Created or ChangeType.Updated:
+                cache.Upsert(@event.Automation!);
+                await quartzSync.SyncAsync(@event.Automation!, ct);
+                logger.LogInformation(
+                    "Cache updated for automation {AutomationId} ({ChangeType}, IsEnabled={IsEnabled})",
+                    @event.AutomationId, @event.ChangeType, @event.Automation!.IsEnabled);
+                break;
+
+            case ChangeType.Deleted:
+                cache.Remove(@event.AutomationId);
+                await quartzSync.RemoveAllAsync(@event.AutomationId, ct);
+                logger.LogInformation(
+                    "Cache removed automation {AutomationId}", @event.AutomationId);
+                break;
         }
     }
 }
 ```
-
-### AutomationChangedEvent (in FlowForge.Contracts)
-
-```csharp
-public record AutomationChangedEvent(
-    Guid                 AutomationId,
-    ChangeType           ChangeType,
-    AutomationSnapshot?  Automation   // null when ChangeType is Deleted
-);
-
-public enum ChangeType { Created, Updated, Deleted }
-```
-
-Web API publishes this event at the end of every `AutomationService.CreateAsync`, `UpdateAsync`, and `DeleteAsync`.
 
 ---
 
 ## AutomationWorker
 
-The main evaluation loop. Iterates over the in-memory cache on a fixed interval, evaluates trigger conditions, and publishes `AutomationTriggeredEvent` when conditions are met.
+The main evaluation loop. Skips disabled automations. Resolves evaluators by `TypeId` string (not enum).
 
 ```csharp
-protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+public class AutomationWorker(
+    AutomationCache cache,
+    IEnumerable<ITriggerEvaluator> evaluators,
+    TriggerConditionEvaluator conditionEvaluator,
+    IMessagePublisher publisher,
+    IRedisService redis,
+    IOptions<JobAutomatorOptions> options,
+    ILogger<AutomationWorker> logger) : BackgroundService
 {
-    while (!stoppingToken.IsCancellationRequested)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var automations = _cache.GetAll().Where(a => a.IsActive);
+        logger.LogInformation("AutomationWorker started (evaluation interval: {IntervalMs}ms)",
+            options.Value.EvaluationIntervalMs);
 
-        foreach (var automation in automations)
+        while (!stoppingToken.IsCancellationRequested)
         {
-            // 1. Evaluate all triggers (each hits its own source — Quartz flag, Redis flag, etc.)
-            var results = new Dictionary<Guid, bool>();
-            foreach (var trigger in automation.Triggers)
+            try
             {
-                var evaluator = _evaluators.Single(e => e.Type == trigger.Type);
-                results[trigger.Id] = await evaluator.EvaluateAsync(trigger, stoppingToken);
+                await EvaluateAllAsync(stoppingToken);
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "AutomationWorker evaluation pass failed; retrying after delay");
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                continue;
             }
 
-            // 2. Evaluate the AND/OR condition tree against trigger results
-            var conditionMet = await _conditionEvaluator.EvaluateAsync(
-                automation.ConditionRoot, results, stoppingToken);
-
-            if (!conditionMet) continue;
-
-            // 3. Publish — Web API will create the Job
-            await _publisher.PublishAsync(new AutomationTriggeredEvent(
-                AutomationId: automation.Id,
-                HostGroupId:  automation.HostGroupId,
-                ConnectionId: automation.ConnectionId,
-                TaskId:       automation.TaskId,
-                TriggeredAt:  DateTimeOffset.UtcNow
-            ), stoppingToken);
-
-            _logger.LogInformation("Automation {AutomationId} triggered", automation.Id);
+            await redis.SetAsync("automator:last-evaluated", DateTimeOffset.UtcNow.ToString("O"));
+            await Task.Delay(options.Value.EvaluationIntervalMs, stoppingToken);
         }
 
-        await _redis.SetAsync(
-            "automator:last-evaluated",
-            DateTimeOffset.UtcNow.ToString("O"));
+        logger.LogInformation("AutomationWorker stopped");
+    }
 
-        await Task.Delay(_options.EvaluationIntervalMs, stoppingToken);
+    private async Task EvaluateAllAsync(CancellationToken ct)
+    {
+        var all     = cache.GetAll();
+        var enabled = all.Where(a => a.IsEnabled).ToList();
+
+        logger.LogDebug(
+            "Evaluation pass: {EnabledCount} enabled, {DisabledCount} disabled",
+            enabled.Count, all.Count - enabled.Count);
+
+        foreach (var automation in enabled)
+            await EvaluateAutomationAsync(automation, ct);
+    }
+
+    private async Task EvaluateAutomationAsync(AutomationSnapshot automation, CancellationToken ct)
+    {
+        if (automation.ConditionRoot is null)
+        {
+            logger.LogError(
+                "Automation {AutomationId} ({Name}) has null ConditionRoot — skipping. " +
+                "This is a data integrity issue.",
+                automation.Id, automation.Name);
+            return;
+        }
+
+        logger.LogDebug("Evaluating automation {AutomationId} ({Name})", automation.Id, automation.Name);
+
+        // 1. Evaluate each trigger — resolve evaluator by TypeId (string)
+        var results = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var trigger in automation.Triggers)
+        {
+            // Resolution is by TypeId string — no enum switch needed
+            var evaluator = evaluators.SingleOrDefault(e => e.TypeId == trigger.TypeId);
+            if (evaluator is null)
+            {
+                logger.LogWarning(
+                    "No evaluator registered for TypeId '{TypeId}' " +
+                    "(trigger '{TriggerName}' on automation {AutomationId}). Treating as false.",
+                    trigger.TypeId, trigger.Name, automation.Id);
+                results[trigger.Name] = false;
+                continue;
+            }
+
+            results[trigger.Name] = await evaluator.EvaluateAsync(trigger, ct);
+
+            logger.LogDebug(
+                "Trigger '{TriggerName}' (type={TypeId}) on {AutomationId}: fired={Fired}",
+                trigger.Name, trigger.TypeId, automation.Id, results[trigger.Name]);
+        }
+
+        // 2. Evaluate condition tree
+        var conditionMet = conditionEvaluator.Evaluate(automation.ConditionRoot, results);
+
+        logger.LogDebug(
+            "Automation {AutomationId} ({Name}) condition result: {ConditionMet}",
+            automation.Id, automation.Name, conditionMet);
+
+        if (!conditionMet) return;
+
+        // 3. Publish
+        await publisher.PublishAsync(new AutomationTriggeredEvent(
+            AutomationId: automation.Id,
+            HostGroupId:  automation.HostGroupId,
+            ConnectionId: automation.ConnectionId,
+            TaskId:       automation.TaskId,
+            TriggeredAt:  DateTimeOffset.UtcNow
+        ), ct);
+
+        logger.LogInformation(
+            "Automation {AutomationId} ({Name}) triggered — event published",
+            automation.Id, automation.Name);
     }
 }
 ```
 
-> **Note on concurrency guard**: JobAutomator does not check whether a job is already running before publishing — that responsibility belongs to **Web API**. When Web API receives `AutomationTriggeredEvent`, it checks for an active job before creating a new one. This keeps the concurrency check close to the DB where the authoritative state lives.
+> **Concurrency guard**: the check for an already-running job lives in **Web API**, not here. This keeps the check close to the DB.
 
 ---
 
-## Trigger Types
-
-### 1. Schedule Trigger
-
-Quartz.NET registers a job per Automation on startup. When the schedule fires, it sets a short-lived Redis flag. The `AutomationWorker` reads and consumes the flag on its next evaluation pass.
+## ITriggerEvaluator
 
 ```csharp
-public class ScheduleTriggerEvaluator : ITriggerEvaluator
+public interface ITriggerEvaluator
 {
-    public TriggerType Type => TriggerType.Schedule;
+    /// <summary>
+    /// Matches TriggerTypes constants — e.g. "schedule", "custom-script".
+    /// Used by AutomationWorker to resolve the right evaluator per trigger.
+    /// </summary>
+    string TypeId { get; }
+
+    /// <summary>
+    /// Returns true if this trigger fired since the last evaluation pass.
+    /// Implementations consume the signal (e.g. delete Redis flag) to avoid double-firing.
+    /// </summary>
+    Task<bool> EvaluateAsync(TriggerSnapshot trigger, CancellationToken ct);
+}
+```
+
+---
+
+## Trigger Evaluators
+
+### ScheduleTriggerEvaluator
+
+```csharp
+public class ScheduleTriggerEvaluator(IRedisService redis, ILogger<ScheduleTriggerEvaluator> logger)
+    : ITriggerEvaluator
+{
+    public string TypeId => TriggerTypes.Schedule;
 
     public async Task<bool> EvaluateAsync(TriggerSnapshot trigger, CancellationToken ct)
     {
         var key   = $"trigger:schedule:{trigger.Id}:fired";
-        var fired = await _redis.GetAsync(key);
+        var fired = await redis.GetAsync(key);
         if (fired is null) return false;
 
-        await _redis.DeleteAsync(key);   // consume — one fire per evaluation pass
+        await redis.DeleteAsync(key);
+        logger.LogDebug("Schedule trigger '{TriggerName}' consumed fired flag", trigger.Name);
         return true;
     }
 }
-
-// Quartz job (registered per automation trigger on startup and on cache update)
-public class ScheduledTriggerJob(IRedisService redis) : IJob
-{
-    public async Task Execute(IJobExecutionContext context)
-    {
-        var triggerId = context.JobDetail.JobDataMap.GetGuid("triggerId");
-        await redis.SetAsync(
-            $"trigger:schedule:{triggerId}:fired", "1",
-            expiry: TimeSpan.FromMinutes(2));   // expires if evaluator misses a pass
-    }
-}
 ```
 
-**Config shape (stored in `TriggerSnapshot.ConfigJson`):**
-```json
-{ "cronExpression": "0 0/5 * * * ?" }
-```
-
-### 2. SQL Trigger
-
-Polls an **external, user-configured database** (not the FlowForge platform DB — this is fine). Tracks the last result hash in Redis to avoid re-firing on stale data.
+### SqlTriggerEvaluator
 
 ```csharp
-public class SqlTriggerEvaluator : ITriggerEvaluator
+public class SqlTriggerEvaluator(IRedisService redis, ILogger<SqlTriggerEvaluator> logger)
+    : ITriggerEvaluator
 {
-    public TriggerType Type => TriggerType.Sql;
+    public string TypeId => TriggerTypes.Sql;
 
     public async Task<bool> EvaluateAsync(TriggerSnapshot trigger, CancellationToken ct)
     {
         var config  = JsonSerializer.Deserialize<SqlTriggerConfig>(trigger.ConfigJson)!;
         var results = await ExecuteQueryAsync(config.ConnectionString, config.Query, ct);
+        var hash    = ComputeHash(results);
+        var lastHash = await redis.GetAsync($"trigger:sql:{trigger.Id}:last-hash");
 
-        var hash     = ComputeHash(results);
-        var lastHash = await _redis.GetAsync($"trigger:sql:{trigger.Id}:last-hash");
+        if (hash == lastHash)
+        {
+            logger.LogDebug("SQL trigger '{TriggerName}' result unchanged", trigger.Name);
+            return false;
+        }
 
-        if (hash == lastHash) return false;
-
-        await _redis.SetAsync($"trigger:sql:{trigger.Id}:last-hash", hash);
-        return results.Count > 0;
+        await redis.SetAsync($"trigger:sql:{trigger.Id}:last-hash", hash);
+        var fired = results.Count > 0;
+        logger.LogDebug("SQL trigger '{TriggerName}' hash changed — rows={RowCount}, fired={Fired}",
+            trigger.Name, results.Count, fired);
+        return fired;
     }
 }
 ```
 
-**Config shape:**
-```json
-{
-  "connectionString": "Host=external-db;Database=myapp;...",
-  "query": "SELECT id FROM orders WHERE processed = false LIMIT 1",
-  "pollingIntervalSeconds": 30
-}
-```
-
-> SQL trigger polls a user's own database, not the FlowForge DB. No ownership boundary is crossed.
-
-### 3. Job Completed Trigger
-
-Consumes `flowforge:job-status-changed` stream. When a `Completed` event matches the configured `watchAutomationId`, it sets a Redis flag for the relevant triggers.
+### JobCompletedTriggerEvaluator
 
 ```csharp
-public class JobCompletedTriggerEvaluator : ITriggerEvaluator
+public class JobCompletedTriggerEvaluator(
+    IRedisService redis, AutomationCache cache,
+    ILogger<JobCompletedTriggerEvaluator> logger) : ITriggerEvaluator
 {
-    public TriggerType Type => TriggerType.JobCompleted;
+    public string TypeId => TriggerTypes.JobCompleted;
 
-    // Called by a background stream consumer (JobCompletedFlagWorker), not during evaluate pass
+    // Called by JobCompletedFlagWorker (stream consumer) — not during the evaluate pass
     public async Task HandleJobStatusChangedAsync(JobStatusChangedEvent @event, CancellationToken ct)
     {
         if (@event.Status != JobStatus.Completed) return;
 
-        // Find affected triggers from the in-memory cache (no DB lookup)
-        var affectedTriggers = _cache.GetAll()
+        var affected = cache.GetAll()
             .SelectMany(a => a.Triggers)
-            .Where(t => t.Type == TriggerType.JobCompleted)
+            .Where(t => t.TypeId == TriggerTypes.JobCompleted)
             .Where(t =>
             {
                 var cfg = JsonSerializer.Deserialize<JobCompletedTriggerConfig>(t.ConfigJson)!;
                 return cfg.WatchAutomationId == @event.AutomationId;
-            });
+            })
+            .ToList();
 
-        foreach (var trigger in affectedTriggers)
-            await _redis.SetAsync(
+        foreach (var trigger in affected)
+        {
+            await redis.SetAsync(
                 $"trigger:job-completed:{trigger.Id}:fired", "1",
                 expiry: TimeSpan.FromMinutes(10));
+            logger.LogInformation(
+                "JobCompleted trigger '{TriggerName}' flagged — watched automation {WatchedId} completed",
+                trigger.Name, @event.AutomationId);
+        }
     }
 
     public async Task<bool> EvaluateAsync(TriggerSnapshot trigger, CancellationToken ct)
     {
         var key   = $"trigger:job-completed:{trigger.Id}:fired";
-        var fired = await _redis.GetAsync(key);
+        var fired = await redis.GetAsync(key);
         if (fired is null) return false;
-
-        await _redis.DeleteAsync(key);
+        await redis.DeleteAsync(key);
+        logger.LogDebug("JobCompleted trigger '{TriggerName}' consumed fired flag", trigger.Name);
         return true;
     }
 }
 ```
 
-**Config shape:**
-```json
-{ "watchAutomationId": "uuid-of-upstream-automation" }
-```
-
-### 4. Webhook Trigger
-
-Web API sets a Redis flag when `POST /api/automations/{id}/webhook` is called. JobAutomator reads and consumes the flag.
+### WebhookTriggerEvaluator
 
 ```csharp
-public class WebhookTriggerEvaluator : ITriggerEvaluator
+public class WebhookTriggerEvaluator(IRedisService redis, ILogger<WebhookTriggerEvaluator> logger)
+    : ITriggerEvaluator
 {
-    public TriggerType Type => TriggerType.Webhook;
+    public string TypeId => TriggerTypes.Webhook;
 
     public async Task<bool> EvaluateAsync(TriggerSnapshot trigger, CancellationToken ct)
     {
         var key   = $"trigger:webhook:{trigger.Id}:fired";
-        var fired = await _redis.GetAsync(key);
+        var fired = await redis.GetAsync(key);
         if (fired is null) return false;
-
-        await _redis.DeleteAsync(key);
+        await redis.DeleteAsync(key);
+        logger.LogDebug("Webhook trigger '{TriggerName}' consumed fired flag", trigger.Name);
         return true;
     }
+}
+```
+
+### CustomScriptTriggerEvaluator
+
+Handles all triggers with `TypeId = "custom-script"`. Each trigger stores its own Python script in `ConfigJson`. See **TRIGGERS.md** for the full implementation including pip venv support and the security model.
+
+```csharp
+public class CustomScriptTriggerEvaluator(
+    IRedisService redis,
+    IOptions<CustomScriptOptions> options,
+    ILogger<CustomScriptTriggerEvaluator> logger) : ITriggerEvaluator
+{
+    public string TypeId => TriggerTypes.CustomScript;
+
+    public async Task<bool> EvaluateAsync(TriggerSnapshot trigger, CancellationToken ct)
+    {
+        var config = JsonSerializer.Deserialize<CustomScriptTriggerConfig>(trigger.ConfigJson)!;
+
+        // Rate-limit: respect pollingIntervalSeconds per individual trigger
+        var lastRunKey = $"trigger:custom-script:{trigger.Id}:last-run";
+        var lastRunStr = await redis.GetAsync(lastRunKey);
+        if (lastRunStr is not null)
+        {
+            var elapsed = DateTimeOffset.UtcNow - DateTimeOffset.Parse(lastRunStr);
+            if (elapsed < TimeSpan.FromSeconds(config.PollingIntervalSeconds))
+            {
+                logger.LogDebug(
+                    "Custom script trigger '{TriggerName}' skipped — within interval ({Interval}s)",
+                    trigger.Name, config.PollingIntervalSeconds);
+                return false;
+            }
+        }
+
+        await redis.SetAsync(lastRunKey, DateTimeOffset.UtcNow.ToString("O"));
+
+        // Run Python script in sandboxed subprocess — see TRIGGERS.md for full detail
+        return await RunScriptAsync(trigger, config, ct);
+    }
+
+    // ... RunScriptAsync, EnsureVenvAsync — see TRIGGERS.md
 }
 ```
 
@@ -395,23 +484,28 @@ public class WebhookTriggerEvaluator : ITriggerEvaluator
 
 ## Trigger Condition Evaluator
 
-Evaluates the AND/OR tree stored in `AutomationSnapshot.ConditionRoot` against a dictionary of per-trigger boolean results.
+Evaluates the AND/OR tree. **Dictionary is keyed by `TriggerName` (string), not by GUID.**
 
 ```csharp
-public class TriggerConditionEvaluator
+public class TriggerConditionEvaluator(ILogger<TriggerConditionEvaluator> logger)
 {
-    public async Task<bool> EvaluateAsync(
+    public bool Evaluate(
         TriggerConditionNode node,
-        IReadOnlyDictionary<Guid, bool> triggerResults,
-        CancellationToken ct)
+        IReadOnlyDictionary<string, bool> triggerResults)
     {
-        // Leaf node — maps directly to a trigger result
-        if (node.TriggerId.HasValue)
-            return triggerResults.GetValueOrDefault(node.TriggerId.Value);
+        if (node.TriggerName is not null)
+        {
+            if (!triggerResults.TryGetValue(node.TriggerName, out var result))
+            {
+                logger.LogWarning(
+                    "Condition references TriggerName '{TriggerName}' with no evaluation result — treating as false",
+                    node.TriggerName);
+                return false;
+            }
+            return result;
+        }
 
-        // Composite node — evaluate children then apply operator
-        var childResults = await Task.WhenAll(
-            node.Nodes!.Select(n => EvaluateAsync(n, triggerResults, ct)));
+        var childResults = node.Nodes!.Select(n => Evaluate(n, triggerResults)).ToList();
 
         return node.Operator switch
         {
@@ -425,67 +519,36 @@ public class TriggerConditionEvaluator
 
 ---
 
-## Quartz Lifecycle: Syncing Schedules With Cache
+## Quartz Lifecycle
 
-When `AutomationCacheSyncWorker` updates the cache, it must also update Quartz jobs for any affected Schedule triggers.
-
-```csharp
-// AutomationCacheSyncWorker — after cache.Upsert(automation)
-await _quartzScheduleSync.SyncAsync(automation, stoppingToken);
-
-// QuartzScheduleSync
-public async Task SyncAsync(AutomationSnapshot automation, CancellationToken ct)
-{
-    foreach (var trigger in automation.Triggers.Where(t => t.Type == TriggerType.Schedule))
-    {
-        var config = JsonSerializer.Deserialize<ScheduleTriggerConfig>(trigger.ConfigJson)!;
-        var jobKey = new JobKey($"trigger-{trigger.Id}");
-
-        // Delete existing, re-register with potentially new cron
-        if (await _scheduler.CheckExists(jobKey, ct))
-            await _scheduler.DeleteJob(jobKey, ct);
-
-        if (automation.IsActive)
-        {
-            await _scheduler.ScheduleJob(
-                JobBuilder.Create<ScheduledTriggerJob>()
-                    .WithIdentity(jobKey)
-                    .UsingJobData("triggerId", trigger.Id)
-                    .Build(),
-                TriggerBuilder.Create()
-                    .WithCronSchedule(config.CronExpression)
-                    .Build(),
-                ct);
-        }
-    }
-}
-```
+`QuartzScheduleSync` syncs Quartz schedule jobs when the cache changes. It uses `trigger.TypeId == TriggerTypes.Schedule` (string comparison) instead of an enum switch. Disabling an automation removes its Quartz schedules; re-enabling re-registers them. See full implementation in **TRIGGERS.md**.
 
 ---
 
-## Redis Keys Used by JobAutomator
+## Redis Keys
 
 | Key | TTL | Written by | Read by |
 |---|---|---|---|
-| `trigger:schedule:{triggerId}:fired` | 2 min | Quartz job | `ScheduleTriggerEvaluator` |
-| `trigger:sql:{triggerId}:last-hash` | none | `SqlTriggerEvaluator` | `SqlTriggerEvaluator` |
-| `trigger:job-completed:{triggerId}:fired` | 10 min | `JobCompletedFlagWorker` | `JobCompletedTriggerEvaluator` |
-| `trigger:webhook:{triggerId}:fired` | 10 min | Web API | `WebhookTriggerEvaluator` |
+| `trigger:schedule:{id}:fired` | 2 min | `ScheduledTriggerJob` | `ScheduleTriggerEvaluator` |
+| `trigger:sql:{id}:last-hash` | none | `SqlTriggerEvaluator` | `SqlTriggerEvaluator` |
+| `trigger:job-completed:{id}:fired` | 10 min | `JobCompletedFlagWorker` | `JobCompletedTriggerEvaluator` |
+| `trigger:webhook:{id}:fired` | 10 min | Web API | `WebhookTriggerEvaluator` |
+| `trigger:custom-script:{id}:last-run` | none | `CustomScriptTriggerEvaluator` | `CustomScriptTriggerEvaluator` |
 | `automator:last-evaluated` | none | `AutomationWorker` | Monitoring / ops |
+
+All keys use the trigger's **GUID** (`trigger.Id`) for internal stability. `trigger.Name` appears only in condition expressions.
 
 ---
 
 ## What Web API Must Publish
 
-For JobAutomator's cache to stay current, Web API must publish `AutomationChangedEvent` at the end of every automation mutation:
-
-| Web API action | Event published |
+| Web API action | Event |
 |---|---|
 | `POST /api/automations` | `AutomationChangedEvent` (Created) |
 | `PUT /api/automations/{id}` | `AutomationChangedEvent` (Updated) |
 | `DELETE /api/automations/{id}` | `AutomationChangedEvent` (Deleted) |
-
-This is a one-line addition at the end of each service method — see **WEBAPI.md**.
+| `PUT /api/automations/{id}/enable` | `AutomationChangedEvent` (Updated, `IsEnabled=true`) |
+| `PUT /api/automations/{id}/disable` | `AutomationChangedEvent` (Updated, `IsEnabled=false`) |
 
 ---
 
@@ -501,44 +564,50 @@ This is a one-line addition at the end of each service method — see **WEBAPI.m
   },
   "Redis": {
     "ConnectionString": "redis:6379"
+  },
+  "CustomScript": {
+    "ScriptTempDir": "/tmp/flowforge/scripts",
+    "VenvCacheDir":  "/tmp/flowforge/venvs",
+    "PythonPath":    "python3"
   }
 }
 ```
-
-> No `ConnectionStrings:DefaultConnection` — JobAutomator does not connect to any FlowForge database.
 
 ---
 
 ## DI Registration (Program.cs sketch)
 
 ```csharp
-// HTTP client for one-time startup snapshot
 builder.Services
     .AddHttpClient<IAutomationApiClient, AutomationApiClient>(client =>
         client.BaseAddress = new Uri(builder.Configuration["WebApi:BaseUrl"]!));
 
-// In-memory cache (singleton — shared across all workers)
 builder.Services.AddSingleton<AutomationCache>();
 
-// Quartz
 builder.Services
     .AddQuartz(q => q.UseMicrosoftDependencyInjectionJobFactory())
     .AddQuartzHostedService();
 
-// Trigger evaluators
-builder.Services
-    .AddScoped<ITriggerEvaluator, ScheduleTriggerEvaluator>()
-    .AddScoped<ITriggerEvaluator, SqlTriggerEvaluator>()
-    .AddScoped<ITriggerEvaluator, JobCompletedTriggerEvaluator>()
-    .AddScoped<ITriggerEvaluator, WebhookTriggerEvaluator>();
+builder.Services.AddSingleton<QuartzScheduleSync>();
 
-builder.Services.AddScoped<TriggerConditionEvaluator>();
+builder.Services.Configure<CustomScriptOptions>(
+    builder.Configuration.GetSection(CustomScriptOptions.SectionName));
 
-// Workers — order matters: initializer must finish before workers start
+// All evaluators — singleton, stateless (use Redis for any persistent state)
 builder.Services
-    .AddHostedService<AutomationCacheInitializer>()   // runs once at startup
-    .AddHostedService<AutomationCacheSyncWorker>()    // keeps cache current
-    .AddHostedService<AutomationWorker>();             // evaluation loop
+    .AddSingleton<ITriggerEvaluator, ScheduleTriggerEvaluator>()
+    .AddSingleton<ITriggerEvaluator, SqlTriggerEvaluator>()
+    .AddSingleton<ITriggerEvaluator, JobCompletedTriggerEvaluator>()
+    .AddSingleton<ITriggerEvaluator, WebhookTriggerEvaluator>()
+    .AddSingleton<ITriggerEvaluator, CustomScriptTriggerEvaluator>();
+
+builder.Services.AddSingleton<TriggerConditionEvaluator>();
+
+builder.Services
+    .AddHostedService<AutomationCacheInitializer>()
+    .AddHostedService<AutomationCacheSyncWorker>()
+    .AddHostedService<AutomationWorker>()
+    .AddHostedService<JobCompletedFlagWorker>();
 
 builder.Services.AddInfrastructure(builder.Configuration);
 ```
