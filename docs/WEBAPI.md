@@ -199,6 +199,8 @@ public class TriggersController(ITriggerTypeRegistry registry, ILogger<TriggersC
 
 ## Service Layer
 
+> **Planned (ROADMAP #4 — Outbox Pattern):** `AutomationService` currently calls `publisher.PublishAsync(...)` directly after saving to the DB. This will be replaced with `outboxWriter.WriteAsync(...)` executed inside the same `PlatformDbContext` transaction, guaranteeing atomicity between the entity change and the event. A new `OutboxRelayWorker` background service will poll and relay pending outbox entries to Redis.
+
 ### IAutomationService
 
 ```csharp
@@ -326,6 +328,10 @@ public async Task RemoveAsync(IJobRepository repo, Guid id, CancellationToken ct
 
 ### AutomationTriggeredConsumer
 
+> **Planned (ROADMAP #3 — Duplicate Job Prevention):** Before creating a job, the consumer will check `automation.ActiveJobId`. If it is set and the referenced job is still in a non-terminal state, the event is discarded. If it is set but the job is terminal (crash recovery path), `ActiveJobId` is cleared and a new job is created. After `Job.Create`, call `automation.SetActiveJob(job.Id)` and save the automation in the same operation. See ROADMAP.md for full lifecycle.
+
+> **Planned (ROADMAP #4 — Outbox Pattern):** `publisher.PublishAsync(new JobCreatedEvent(...))` will be replaced by `outboxWriter.WriteAsync(new JobCreatedEvent(...))` inside the same DB transaction as the job save. A separate `OutboxRelayWorker` will publish from the outbox to Redis asynchronously.
+
 ```csharp
 public class AutomationTriggeredConsumer(
     IMessageConsumer consumer,
@@ -391,6 +397,8 @@ public class AutomationTriggeredConsumer(
 ```
 
 ### JobStatusChangedConsumer
+
+> **Planned (ROADMAP #3 — Duplicate Job Prevention):** When `@event.Status` is a terminal status (`Completed`, `CompletedUnsuccessfully`, `Error`, `Cancelled`, `Removed`), after saving the job status change, the consumer will also load the `Automation` by `job.AutomationId`, call `automation.ClearActiveJob()`, and save the automation.
 
 ```csharp
 public class JobStatusChangedConsumer(
@@ -708,11 +716,13 @@ public class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Exception
 POST /api/automations/{id}/webhook   Header: X-Webhook-Secret: <secret>
 
 1. Verify automation exists and IsEnabled (returns 422 if disabled)
-2. Validate webhook secret
+2. Validate webhook secret  ← NOT YET IMPLEMENTED (see ROADMAP.md #2)
 3. Set Redis flag: trigger:webhook:{triggerId}:fired = 1 (TTL 10 min)
 4. Return 202 Accepted
 5. JobAutomator reads the flag on next evaluation pass
 ```
+
+> **Planned (ROADMAP #2):** `WebhookTriggerConfig.SecretHash` stores a BCrypt hash of the caller's secret. `FireWebhookAsync` will verify `BCrypt.Verify(requestSecret, config.SecretHash)` before setting the Redis flag. No secret header when `SecretHash` is configured → 401. Wrong secret → 401. `UnauthorizedWebhookException` maps to HTTP 401 in `ExceptionHandlingMiddleware`. Requires `BCrypt.Net-Next` NuGet in `FlowForge.WebApi.csproj`.
 
 ---
 

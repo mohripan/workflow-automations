@@ -216,8 +216,27 @@ dotnet test
 
 ---
 
+## Planned Improvements
+
+See **ROADMAP.md** for the full list of improvements planned for FlowForge. Summary:
+
+| # | Item | Area |
+|---|---|---|
+| 1 | Redis consumer group bootstrap fix | Bug / Reliability |
+| 2 | Webhook secret validation (BCrypt) | Security |
+| 3 | Duplicate job prevention (`ActiveJobId` on Automation) | Business Logic |
+| 4 | Transactional Outbox Pattern | Reliability |
+| 5 | OpenTelemetry distributed tracing | Observability |
+| 6 | Quartz clustering (ADO.NET job store) | Scalability |
+| 7 | Startup resilience for `AutomationCacheInitializer` | Reliability |
+
+Each item in ROADMAP.md includes the motivation, affected files, and concrete design decisions to follow during implementation.
+
+---
+
 ## Out of Scope (for now)
 - Frontend UI (API-first)
 - Auth Server / OAuth2
 - Multi-tenancy
 - Reusable named custom trigger definitions (saved scripts shared across automations)
+- Unit & integration test suite (deferred — see ROADMAP.md)

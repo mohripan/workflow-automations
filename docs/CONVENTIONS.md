@@ -211,6 +211,27 @@ public interface IRedisService
 }
 ```
 
+### Transactional Event Publishing (Outbox Pattern)
+
+> **Planned — see ROADMAP.md #4.** Currently, services call `IMessagePublisher.PublishAsync` directly after saving to the database. These are two separate I/O operations with no atomicity guarantee: a process crash between them leaves the DB updated but the event undelivered, causing permanent cache staleness in dependent services.
+>
+> **Planned convention:** For events that must be delivered reliably alongside a DB mutation (e.g. `AutomationChangedEvent`, `JobCreatedEvent`), use an **Outbox Writer** instead of calling `IMessagePublisher` directly from the service layer:
+>
+> ```csharp
+> // Instead of: await publisher.PublishAsync(new AutomationChangedEvent(...), ct: ct);
+> await outboxWriter.WriteAsync(new AutomationChangedEvent(...), ct);
+> ```
+>
+> The `OutboxWriter` writes a serialized `OutboxMessage` row to the same `PlatformDbContext` transaction. A separate `OutboxRelayWorker` polls `OutboxMessages WHERE SentAt IS NULL`, publishes each to Redis, then marks `SentAt`. Consumers must tolerate duplicate delivery (they already do via Redis consumer group `XACK`).
+>
+> Direct `IMessagePublisher` calls remain valid for fire-and-forget cases where delivery is best-effort (e.g. heartbeats, diagnostics).
+
+### Redis Consumer Group Bootstrap
+
+> **Planned — see ROADMAP.md #1.** Every service that consumes a Redis Stream must ensure its consumer group exists before it begins consuming. Redis requires `XGROUP CREATE {stream} {group} $ MKSTREAM` to be called once; subsequent calls with an existing group return a `BUSYGROUP` error which should be swallowed.
+>
+> **Convention:** Each service's `Program.cs` calls `IStreamBootstrapper.EnsureAsync(streamName, groupName)` for every stream+group it reads, during startup, before any `BackgroundService` begins consuming. Use `$` as the starting offset — **not `0`** — to avoid re-delivering historical messages on every restart.
+
 ### Stream Name Constants
 
 All stream names are constants in `StreamNames.cs` — never inline magic strings.
@@ -228,6 +249,21 @@ public static class StreamNames
     public static string HostStream(string hostId) => $"flowforge:host:{hostId}";
 }
 ```
+
+---
+
+### Observability (OpenTelemetry)
+
+> **Planned — see ROADMAP.md #5.** Each service will have an `ActivitySource` named `FlowForge.{ServiceName}` (e.g. `FlowForge.WebApi`, `FlowForge.JobAutomator`). Trace context is propagated through Redis Stream messages as an extra `traceparent` field injected by `RedisStreamPublisher` and extracted by `RedisStreamConsumer`.
+>
+> **Span naming conventions:**
+> - `publish {StreamName}` — outgoing stream messages
+> - `consume {StreamName}` — incoming stream messages
+> - `evaluate automation {AutomationId}` — in `AutomationWorker`
+> - `dispatch job {JobId}` — in `JobDispatcherWorker`
+> - `execute job {JobId}` — in `WorkflowEngine`
+>
+> The OpenTelemetry `TraceId` serves as the correlation ID across all services — no separate correlation field is needed on events.
 
 ---
 

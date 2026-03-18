@@ -35,11 +35,12 @@ FlowForge/
 │   │   │
 │   │   ├── FlowForge.Domain/
 │   │   │   ├── Entities/
-│   │   │   │   ├── Automation.cs                    # IsEnabled, ConditionRoot required
+│   │   │   │   ├── Automation.cs                    # IsEnabled, ConditionRoot required; planned: ActiveJobId
 │   │   │   │   ├── Job.cs
 │   │   │   │   ├── Trigger.cs                       # TypeId is string; Name unique within Automation
 │   │   │   │   ├── WorkflowHost.cs
-│   │   │   │   └── HostGroup.cs
+│   │   │   │   ├── HostGroup.cs
+│   │   │   │   └── OutboxMessage.cs                 # planned: transactional outbox entity
 │   │   │   ├── Triggers/
 │   │   │   │   ├── TriggerTypes.cs                  # String constants: "schedule", "sql", etc.
 │   │   │   │   ├── ITriggerTypeDescriptor.cs        # Self-describes a type + validates configJson
@@ -77,10 +78,11 @@ FlowForge/
 │   │       │   │   ├── PlatformDbContext.cs
 │   │       │   │   ├── Migrations/
 │   │       │   │   └── Configurations/
-│   │       │   │       ├── AutomationConfiguration.cs   # TriggerConditionNode as owned JSON column
+│   │       │   │       ├── AutomationConfiguration.cs   # TriggerConditionNode as owned JSON column; planned: ActiveJobId
 │   │       │   │       ├── TriggerConfiguration.cs      # Unique index (AutomationId, Name); TypeId varchar(100)
 │   │       │   │       ├── WorkflowHostConfiguration.cs
-│   │       │   │       └── HostGroupConfiguration.cs
+│   │       │   │       ├── HostGroupConfiguration.cs
+│   │       │   │       └── OutboxMessageConfiguration.cs # planned: outbox table config
 │   │       │   └── Jobs/
 │   │       │       ├── JobsDbContext.cs
 │   │       │       ├── Migrations/
@@ -89,14 +91,21 @@ FlowForge/
 │   │       ├── Messaging/
 │   │       │   ├── Abstractions/
 │   │       │   │   ├── IMessagePublisher.cs
-│   │       │   │   └── IMessageConsumer.cs
+│   │       │   │   ├── IMessageConsumer.cs
+│   │       │   │   └── IStreamBootstrapper.cs    # planned: XGROUP CREATE MKSTREAM on startup
+│   │       │   ├── Outbox/
+│   │       │   │   ├── IOutboxWriter.cs          # planned: write event to outbox table
+│   │       │   │   └── OutboxWriter.cs           # planned: EF Core implementation
 │   │       │   └── Redis/
-│   │       │       ├── RedisStreamPublisher.cs
-│   │       │       ├── RedisStreamConsumer.cs
+│   │       │       ├── RedisStreamPublisher.cs   # planned: inject traceparent header
+│   │       │       ├── RedisStreamConsumer.cs    # planned: extract traceparent header
+│   │       │       ├── RedisStreamBootstrapper.cs # planned: IStreamBootstrapper impl
 │   │       │       └── StreamNames.cs
 │   │       ├── Caching/
 │   │       │   ├── IRedisService.cs
 │   │       │   └── RedisService.cs
+│   │       ├── Telemetry/
+│   │       │   └── TelemetryExtensions.cs        # planned: AddFlowForgeTelemetry extension
 │   │       ├── Repositories/
 │   │       │   ├── IJobRepository.cs
 │   │       │   ├── IAutomationRepository.cs
@@ -139,6 +148,13 @@ FlowForge/
 │       │   │   └── CreateAutomationRequestValidator.cs
 │       │   ├── Middleware/
 │       │   │   └── ExceptionHandlingMiddleware.cs
+│       │   ├── Workers/
+│       │   │   ├── AutomationTriggeredConsumer.cs       # planned: ActiveJobId check + outbox
+│       │   │   ├── JobStatusChangedConsumer.cs          # planned: ClearActiveJob on terminal status
+│       │   │   └── OutboxRelayWorker.cs                 # planned: polls outbox, publishes to Redis
+│       │   ├── Services/
+│       │   │   ├── AutomationService.cs                 # planned: outbox write instead of direct publish
+│       │   │   └── JobService.cs
 │       │   ├── appsettings.json
 │       │   ├── Program.cs
 │       │   └── FlowForge.WebApi.csproj
@@ -163,7 +179,7 @@ FlowForge/
 │       │   │   ├── ScheduledTriggerJob.cs
 │       │   │   └── QuartzScheduleSync.cs
 │       │   ├── Workers/
-│       │   │   ├── AutomationCacheInitializer.cs
+│       │   │   ├── AutomationCacheInitializer.cs        # planned: Polly retry on startup
 │       │   │   ├── AutomationCacheSyncWorker.cs
 │       │   │   ├── AutomationWorker.cs
 │       │   │   └── JobCompletedFlagWorker.cs
@@ -322,6 +338,7 @@ public record TriggerConditionNode(
 | `AutomationNotFoundException` | Automation lookup returns null |
 | `InvalidJobTransitionException` | Illegal job status transition |
 | `UnknownConnectionIdException` | `ConnectionId` not in config |
+| `UnauthorizedWebhookException` | Webhook secret missing or invalid (planned — maps to HTTP 401) |
 
 ---
 
@@ -403,7 +420,11 @@ FlowForge.WorkflowEngine  → Domain, Contracts, Infrastructure
 | Service | Kind | Reason |
 |---|---|---|
 | WebApi | Deployment | Stateless, scalable |
-| JobAutomator | Deployment | Redis consumer groups; **requires Python 3 in image** |
+| JobAutomator | Deployment | Redis consumer groups; **requires Python 3 in image**; planned: multi-replica safe via Quartz clustering |
 | JobOrchestrator | Deployment (1 replica) | Stateful round-robin |
 | WorkflowHost | DaemonSet | One per node |
 | WorkflowEngine | (not deployed) | Spawned as child process |
+
+**Planned infrastructure additions (see ROADMAP.md):**
+- `postgres-quartz` — dedicated PostgreSQL DB (or schema) for Quartz ADO.NET job store (ROADMAP #6)
+- `jaeger` / Grafana Tempo — OTLP trace collector for OpenTelemetry (ROADMAP #5)

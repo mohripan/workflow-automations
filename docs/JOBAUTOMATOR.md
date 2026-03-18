@@ -94,6 +94,8 @@ public record TriggerSnapshot(
 
 ## Startup: One-Time HTTP Snapshot
 
+> **Planned (ROADMAP #7 — Startup Resilience):** `AutomationCacheInitializer.StartAsync` currently throws on any HTTP failure, crashing the entire `JobAutomator` process. In Kubernetes this triggers a pod restart loop. The fix is to wrap the API call in a `Polly` retry loop with exponential backoff (2s → 4s → 8s → 16s → max 30s), retrying until the fetch succeeds or the host cancellation token fires. Use `Microsoft.Extensions.Http.Resilience` configured on `IAutomationApiClient`'s `HttpClient` registration.
+
 ```csharp
 public class AutomationCacheInitializer(
     IAutomationApiClient apiClient,
@@ -523,6 +525,12 @@ public class TriggerConditionEvaluator(ILogger<TriggerConditionEvaluator> logger
 
 `QuartzScheduleSync` syncs Quartz schedule jobs when the cache changes. It uses `trigger.TypeId == TriggerTypes.Schedule` (string comparison) instead of an enum switch. Disabling an automation removes its Quartz schedules; re-enabling re-registers them. See full implementation in **TRIGGERS.md**.
 
+> **Planned (ROADMAP #6 — Quartz Clustering):** The current Quartz configuration uses an **in-memory job store**. This means:
+> - If the pod crashes, all scheduled jobs are lost until the next restart and cache re-seed.
+> - Scaling `JobAutomator` to 2+ replicas causes duplicate trigger fires (each replica fires independently).
+>
+> The fix is to switch to the **Quartz ADO.NET PostgreSQL job store** with `quartz.jobStore.clustered = true`. Quartz's clustering logic ensures only one node in the cluster fires each scheduled job, regardless of replica count. Requires adding `QRTZ_*` tables to a dedicated database (or separate schema in the platform DB). `QuartzScheduleSync` needs no logic changes — clustering is transparent to application code.
+
 ---
 
 ## Redis Keys
@@ -572,6 +580,12 @@ All keys use the trigger's **GUID** (`trigger.Id`) for internal stability. `trig
   }
 }
 ```
+
+---
+
+## Redis Consumer Group Bootstrap
+
+> **Planned (ROADMAP #1):** `AutomationCacheSyncWorker` calls `XREADGROUP` on startup. Redis requires the consumer group to exist (created via `XGROUP CREATE ... MKSTREAM`) before any `XREADGROUP` call. On a fresh Redis instance, this causes an immediate `NOGROUP` crash. The fix is an `IStreamBootstrapper.EnsureAsync(streamName, groupName)` call in `Program.cs` before consumers start. This is idempotent — if the group already exists (`BUSYGROUP`), the error is swallowed. Always use `$` (not `0`) as the starting offset to avoid re-delivering historical messages.
 
 ---
 
