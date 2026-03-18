@@ -69,9 +69,7 @@ try
         JobId = job.Id,
         TaskId = job.TaskId,
         ConnectionId = connectionId,
-        Parameters = string.IsNullOrEmpty(job.ParametersJson) 
-            ? new Dictionary<string, JsonElement>() 
-            : JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(job.ParametersJson) ?? []
+        Parameters = new Dictionary<string, JsonElement>()
     };
 
     var handler = registry.Get(job.TaskId);

@@ -28,14 +28,14 @@ public class AutomationTriggeredConsumer(
                     ?? throw new AutomationNotFoundException(@event.AutomationId);
 
                 var hostGroup = await hostGroupRepo.GetByIdAsync(automation.HostGroupId, stoppingToken)
-                    ?? throw new DomainException($"Host group {automation.HostGroupId} not found");
+                    ?? throw new InvalidAutomationException($"Host group {automation.HostGroupId} not found");
 
                 var jobRepo = scope.ServiceProvider.GetRequiredKeyedService<IJobRepository>(hostGroup.ConnectionId);
 
                 var job = Job.Create(
                     automationId: automation.Id,
                     taskId: automation.TaskId,
-                    parametersJson: automation.DefaultParametersJson,
+                    connectionId: hostGroup.ConnectionId,
                     hostGroupId: automation.HostGroupId,
                     triggeredAt: @event.TriggeredAt);
 
@@ -47,7 +47,7 @@ public class AutomationTriggeredConsumer(
                     AutomationId: job.AutomationId,
                     HostGroupId: job.HostGroupId,
                     CreatedAt: job.CreatedAt
-                ), null, stoppingToken);
+                ), ct: stoppingToken);
 
                 logger.LogInformation("Job {JobId} created for automation {AutomationId}", job.Id, automation.Id);
             }

@@ -6,24 +6,25 @@ public record AutomationResponse(
     Guid Id,
     string Name,
     string? Description,
-    string TaskId,
-    string DefaultParametersJson,
     Guid HostGroupId,
+    string TaskId,
+    bool IsEnabled,
     List<TriggerResponse> Triggers,
-    TriggerConditionResponse? TriggerCondition,
+    TriggerConditionResponse TriggerCondition,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt
 );
 
 public record TriggerResponse(
     Guid Id,
-    TriggerType Type,
+    string Name,
+    string TypeId,
     string ConfigJson
 );
 
 public record TriggerConditionResponse(
     ConditionOperator? Operator,
-    Guid? TriggerId,
+    string? TriggerName,
     List<TriggerConditionResponse>? Nodes
 );
 

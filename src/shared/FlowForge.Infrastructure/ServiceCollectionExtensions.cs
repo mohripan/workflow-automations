@@ -5,7 +5,10 @@ using FlowForge.Infrastructure.Persistence.Platform;
 using FlowForge.Infrastructure.Persistence.Jobs;
 using FlowForge.Infrastructure.Repositories;
 using FlowForge.Domain.Repositories;
+using FlowForge.Domain.Triggers;
 using FlowForge.Infrastructure.MultiDb;
+using FlowForge.Infrastructure.Triggers;
+using FlowForge.Infrastructure.Triggers.Descriptors;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,12 +22,13 @@ public static class ServiceCollectionExtensions
     {
         services.AddRedis(config);
         services.AddPersistence(config);
+        services.AddTriggerTypeRegistry();
         return services;
     }
 
     public static IServiceCollection AddRedis(this IServiceCollection services, IConfiguration config)
     {
-        var redisConnString = config.GetSection("Redis:ConnectionString").Value 
+        var redisConnString = config.GetSection("Redis:ConnectionString").Value
             ?? throw new ArgumentNullException("Redis:ConnectionString");
         services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(redisConnString));
         services.AddSingleton<IMessagePublisher, RedisStreamPublisher>();
@@ -55,6 +59,21 @@ public static class ServiceCollectionExtensions
                 return new JobRepository(new JobsDbContext(optionsBuilder.Options));
             });
         }
+        return services;
+    }
+
+    private static IServiceCollection AddTriggerTypeRegistry(this IServiceCollection services)
+    {
+        services.AddSingleton<ITriggerTypeRegistry>(sp =>
+        {
+            var registry = new TriggerTypeRegistry();
+            registry.Register(new ScheduleTriggerDescriptor());
+            registry.Register(new SqlTriggerDescriptor());
+            registry.Register(new JobCompletedTriggerDescriptor());
+            registry.Register(new WebhookTriggerDescriptor());
+            registry.Register(new CustomScriptTriggerDescriptor());
+            return registry;
+        });
         return services;
     }
 }

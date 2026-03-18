@@ -1,5 +1,5 @@
 using FlowForge.Contracts.Events;
-using FlowForge.Domain.Enums;
+using FlowForge.Domain.Triggers;
 using Quartz;
 using Quartz.Impl.Matchers;
 using System.Text.Json;
@@ -9,7 +9,7 @@ namespace FlowForge.JobAutomator.Initialization;
 public interface IQuartzScheduleSync
 {
     Task SyncAsync(AutomationSnapshot automation, CancellationToken ct);
-    Task RemoveAsync(Guid automationId, CancellationToken ct);
+    Task RemoveAllAsync(Guid automationId, CancellationToken ct);
 }
 
 public class QuartzScheduleSync(ISchedulerFactory schedulerFactory) : IQuartzScheduleSync
@@ -18,12 +18,11 @@ public class QuartzScheduleSync(ISchedulerFactory schedulerFactory) : IQuartzSch
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
 
-        // Remove all existing jobs for this automation first to handle removed triggers or cron changes
-        await RemoveAsync(automation.Id, ct);
+        await RemoveAllAsync(automation.Id, ct);
 
-        if (!automation.IsActive) return;
+        if (!automation.IsEnabled) return;
 
-        foreach (var trigger in automation.Triggers.Where(t => t.Type == TriggerType.Schedule))
+        foreach (var trigger in automation.Triggers.Where(t => t.TypeId == TriggerTypes.Schedule))
         {
             var config = JsonSerializer.Deserialize<ScheduleTriggerConfig>(trigger.ConfigJson);
             if (config == null || string.IsNullOrWhiteSpace(config.CronExpression)) continue;
@@ -44,7 +43,7 @@ public class QuartzScheduleSync(ISchedulerFactory schedulerFactory) : IQuartzSch
         }
     }
 
-    public async Task RemoveAsync(Guid automationId, CancellationToken ct)
+    public async Task RemoveAllAsync(Guid automationId, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
         var groupMatcher = GroupMatcher<JobKey>.GroupEquals($"automation-{automationId}");
@@ -52,7 +51,7 @@ public class QuartzScheduleSync(ISchedulerFactory schedulerFactory) : IQuartzSch
         await scheduler.DeleteJobs(jobKeys.ToList(), ct);
     }
 
-    private record ScheduleTriggerConfig(string CronExpression);
+    private record ScheduleTriggerConfig(string? CronExpression);
 }
 
 public class ScheduledTriggerJob(FlowForge.Infrastructure.Caching.IRedisService redis) : IJob

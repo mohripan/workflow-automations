@@ -1,4 +1,4 @@
-using FlowForge.Domain.Enums;
+using FlowForge.Domain.ValueObjects;
 
 namespace FlowForge.Contracts.Events;
 
@@ -13,24 +13,17 @@ public enum ChangeType { Created, Updated, Deleted }
 public record AutomationSnapshot(
     Guid Id,
     string Name,
-    bool IsActive,
+    bool IsEnabled,
     Guid HostGroupId,
     string ConnectionId,
     string TaskId,
     IReadOnlyList<TriggerSnapshot> Triggers,
-    TriggerConditionSnapshot? ConditionRoot
+    TriggerConditionNode ConditionRoot
 );
 
 public record TriggerSnapshot(
     Guid Id,
-    TriggerType Type,
+    string Name,
+    string TypeId,
     string ConfigJson
-);
-
-public enum ConditionOperator { And, Or }
-
-public record TriggerConditionSnapshot(
-    ConditionOperator? Operator,
-    Guid? TriggerId,
-    IReadOnlyList<TriggerConditionSnapshot>? Nodes
 );

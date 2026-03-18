@@ -1,35 +1,33 @@
 using FlowForge.Domain.Enums;
-using FlowForge.Domain.ValueObjects;
 
 namespace FlowForge.WebApi.DTOs.Requests;
 
 public record CreateAutomationRequest(
     string Name,
     string? Description,
-    string TaskId,
-    string DefaultParametersJson,
     Guid HostGroupId,
+    string TaskId,
     List<CreateTriggerRequest> Triggers,
     TriggerConditionRequest TriggerCondition
 );
 
 public record CreateTriggerRequest(
-    TriggerType TriggerType,
+    string Name,
+    string TypeId,
     string ConfigJson
 );
 
 public record TriggerConditionRequest(
     ConditionOperator? Operator,
-    Guid? TriggerId,
+    string? TriggerName,
     List<TriggerConditionRequest>? Nodes
 );
 
 public record UpdateAutomationRequest(
     string Name,
     string? Description,
-    string TaskId,
-    string DefaultParametersJson,
     Guid HostGroupId,
+    string TaskId,
     List<CreateTriggerRequest> Triggers,
     TriggerConditionRequest TriggerCondition
 );

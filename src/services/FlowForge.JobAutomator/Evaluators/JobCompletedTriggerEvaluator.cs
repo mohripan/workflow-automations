@@ -1,34 +1,42 @@
 using FlowForge.Contracts.Events;
 using FlowForge.Domain.Enums;
+using FlowForge.Domain.Triggers;
 using FlowForge.Infrastructure.Caching;
 using FlowForge.JobAutomator.Cache;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
 namespace FlowForge.JobAutomator.Evaluators;
 
-public class JobCompletedTriggerEvaluator(IRedisService redis, AutomationCache cache) : ITriggerEvaluator
+public class JobCompletedTriggerEvaluator(
+    IRedisService redis,
+    AutomationCache cache,
+    ILogger<JobCompletedTriggerEvaluator> logger) : ITriggerEvaluator
 {
-    public TriggerType Type => TriggerType.JobCompleted;
+    public string TypeId => TriggerTypes.JobCompleted;
 
     public async Task HandleJobStatusChangedAsync(JobStatusChangedEvent @event, CancellationToken ct)
     {
         if (@event.Status != JobStatus.Completed) return;
 
-        // Find affected triggers from the in-memory cache (no DB lookup)
-        var affectedTriggers = cache.GetAll()
+        var affected = cache.GetAll()
             .SelectMany(a => a.Triggers)
-            .Where(t => t.Type == TriggerType.JobCompleted)
+            .Where(t => t.TypeId == TriggerTypes.JobCompleted)
             .Where(t =>
             {
                 var cfg = JsonSerializer.Deserialize<JobCompletedTriggerConfig>(t.ConfigJson);
                 return cfg?.WatchAutomationId == @event.AutomationId;
-            });
+            })
+            .ToList();
 
-        foreach (var trigger in affectedTriggers)
+        foreach (var trigger in affected)
         {
             await redis.SetAsync(
                 $"trigger:job-completed:{trigger.Id}:fired", "1",
                 expiry: TimeSpan.FromMinutes(10));
+            logger.LogInformation(
+                "JobCompleted trigger '{TriggerName}' flagged — watched automation {WatchedId} completed",
+                trigger.Name, @event.AutomationId);
         }
     }
 
@@ -36,9 +44,9 @@ public class JobCompletedTriggerEvaluator(IRedisService redis, AutomationCache c
     {
         var key = $"trigger:job-completed:{trigger.Id}:fired";
         var fired = await redis.GetAsync(key);
-        if (fired == null) return false;
-
+        if (fired is null) return false;
         await redis.DeleteAsync(key);
+        logger.LogDebug("JobCompleted trigger '{TriggerName}' consumed fired flag", trigger.Name);
         return true;
     }
 

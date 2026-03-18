@@ -25,12 +25,17 @@ builder.Services.AddSingleton<IQuartzScheduleSync, QuartzScheduleSync>();
 builder.Services.AddQuartz();
 builder.Services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
 
+// CustomScript options
+builder.Services.Configure<CustomScriptOptions>(
+    builder.Configuration.GetSection(CustomScriptOptions.SectionName));
+
 // Evaluators
 builder.Services.AddSingleton<TriggerConditionEvaluator>();
 builder.Services.AddSingleton<ITriggerEvaluator, ScheduleTriggerEvaluator>();
 builder.Services.AddSingleton<ITriggerEvaluator, SqlTriggerEvaluator>();
 builder.Services.AddSingleton<ITriggerEvaluator, JobCompletedTriggerEvaluator>();
 builder.Services.AddSingleton<ITriggerEvaluator, WebhookTriggerEvaluator>();
+builder.Services.AddSingleton<ITriggerEvaluator, CustomScriptTriggerEvaluator>();
 
 // Workers
 builder.Services.AddHostedService<AutomationCacheInitializer>();

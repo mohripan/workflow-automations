@@ -19,7 +19,7 @@ public class AutomationCacheSyncWorker(
         logger.LogInformation("AutomationCacheSyncWorker starting...");
 
         await foreach (var @event in consumer.ConsumeAsync<AutomationChangedEvent>(
-            "flowforge:automation-changed", "job-automator", "automator-1", stoppingToken))
+            StreamNames.AutomationChanged, "job-automator", "automator-cache-sync", stoppingToken))
         {
             try
             {
@@ -31,12 +31,14 @@ public class AutomationCacheSyncWorker(
                         {
                             cache.Upsert(@event.Automation);
                             await scheduleSync.SyncAsync(@event.Automation, stoppingToken);
-                            logger.LogInformation("Cache updated for automation {AutomationId}", @event.AutomationId);
+                            logger.LogInformation(
+                                "Cache updated for automation {AutomationId} ({ChangeType}, IsEnabled={IsEnabled})",
+                                @event.AutomationId, @event.ChangeType, @event.Automation.IsEnabled);
                         }
                         break;
                     case ChangeType.Deleted:
                         cache.Remove(@event.AutomationId);
-                        await scheduleSync.RemoveAsync(@event.AutomationId, stoppingToken);
+                        await scheduleSync.RemoveAllAsync(@event.AutomationId, stoppingToken);
                         logger.LogInformation("Automation {AutomationId} removed from cache", @event.AutomationId);
                         break;
                 }

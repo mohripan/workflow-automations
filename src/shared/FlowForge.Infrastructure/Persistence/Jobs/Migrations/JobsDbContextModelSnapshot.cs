@@ -17,7 +17,7 @@ namespace FlowForge.Infrastructure.Persistence.Jobs.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.0")
+                .HasAnnotation("ProductVersion", "10.0.0")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -31,6 +31,10 @@ namespace FlowForge.Infrastructure.Persistence.Jobs.Migrations
                     b.Property<Guid>("AutomationId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ConnectionId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -43,10 +47,6 @@ namespace FlowForge.Infrastructure.Persistence.Jobs.Migrations
                     b.Property<string>("Message")
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)");
-
-                    b.Property<string>("ParametersJson")
-                        .IsRequired()
-                        .HasColumnType("text");
 
                     b.Property<int>("Status")
                         .HasColumnType("integer");

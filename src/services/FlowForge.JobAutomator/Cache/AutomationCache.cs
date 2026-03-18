@@ -7,6 +7,13 @@ public class AutomationCache
 {
     private readonly ConcurrentDictionary<Guid, AutomationSnapshot> _cache = new();
 
+    public void Seed(IEnumerable<AutomationSnapshot> automations)
+    {
+        _cache.Clear();
+        foreach (var a in automations)
+            _cache[a.Id] = a;
+    }
+
     public void Upsert(AutomationSnapshot snapshot)
     {
         _cache[snapshot.Id] = snapshot;

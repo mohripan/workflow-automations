@@ -1,19 +1,20 @@
 using FlowForge.Contracts.Events;
-using FlowForge.Domain.Enums;
+using FlowForge.Domain.Triggers;
 using FlowForge.Infrastructure.Caching;
-using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Npgsql;
+using System.Text.Json;
 
 namespace FlowForge.JobAutomator.Evaluators;
 
-public class SqlTriggerEvaluator(IRedisService redis) : ITriggerEvaluator
+public class SqlTriggerEvaluator(IRedisService redis, ILogger<SqlTriggerEvaluator> logger) : ITriggerEvaluator
 {
-    public TriggerType Type => TriggerType.Sql;
+    public string TypeId => TriggerTypes.Sql;
 
     public async Task<bool> EvaluateAsync(TriggerSnapshot trigger, CancellationToken ct)
     {
         var config = JsonSerializer.Deserialize<SqlConfig>(trigger.ConfigJson);
-        if (config == null || string.IsNullOrWhiteSpace(config.Query) || string.IsNullOrWhiteSpace(config.ConnectionString)) 
+        if (config == null || string.IsNullOrWhiteSpace(config.Query) || string.IsNullOrWhiteSpace(config.ConnectionString))
             return false;
 
         try
@@ -23,9 +24,9 @@ public class SqlTriggerEvaluator(IRedisService redis) : ITriggerEvaluator
 
             using var command = connection.CreateCommand();
             command.CommandText = config.Query;
-            
+
             var result = await command.ExecuteScalarAsync(ct);
-            
+
             var hash = result?.ToString() ?? "null";
             var lastHashKey = $"trigger:sql:{trigger.Id}:last-hash";
             var lastHash = await redis.GetAsync(lastHashKey);
@@ -37,14 +38,15 @@ public class SqlTriggerEvaluator(IRedisService redis) : ITriggerEvaluator
             if (result is bool b) return b;
             if (result is int i) return i > 0;
             if (result is long l) return l > 0;
-            
+
             return result != null;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            logger.LogWarning(ex, "SQL trigger '{TriggerName}' query failed", trigger.Name);
             return false;
         }
     }
 
-    private record SqlConfig(string Query, string ConnectionString);
+    private record SqlConfig(string? Query, string? ConnectionString);
 }

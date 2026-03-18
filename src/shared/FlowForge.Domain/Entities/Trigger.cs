@@ -1,21 +1,21 @@
-using FlowForge.Domain.Enums;
-
 namespace FlowForge.Domain.Entities;
 
 public class Trigger : BaseEntity<Guid>
 {
-    public TriggerType Type { get; private set; }
-    public string ConfigJson { get; private set; } = default!;
     public Guid AutomationId { get; private set; }
+    public string Name { get; private set; } = default!;
+    public string TypeId { get; private set; } = default!;
+    public string ConfigJson { get; private set; } = default!;
 
     private Trigger() { }
 
-    public static Trigger Create(TriggerType type, string configJson)
+    public static Trigger Create(string name, string typeId, string configJson)
     {
         return new Trigger
         {
             Id = Guid.NewGuid(),
-            Type = type,
+            Name = name,
+            TypeId = typeId,
             ConfigJson = configJson
         };
     }

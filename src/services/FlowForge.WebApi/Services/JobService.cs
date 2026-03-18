@@ -15,14 +15,14 @@ public class JobService(
     public async Task<PagedResult<JobResponse>> GetAllAsync(IJobRepository repo, JobQueryParams query, CancellationToken ct)
     {
         var jobs = await repo.GetAllAsync(query.AutomationId, ct);
-        
+
         var filtered = jobs.AsQueryable();
         if (query.Status.HasValue)
             filtered = filtered.Where(j => j.Status == query.Status.Value);
 
         var total = filtered.Count();
         var items = new List<JobResponse>();
-        
+
         var pagedJobs = filtered
             .Skip((query.Page - 1) * query.PageSize)
             .Take(query.PageSize)
@@ -36,7 +36,7 @@ public class JobService(
                 job.HostId, job.Status, job.Message, job.CreatedAt, job.UpdatedAt
             ));
         }
-        
+
         return new PagedResult<JobResponse>(items, total, query.Page, query.PageSize);
     }
 
@@ -44,7 +44,7 @@ public class JobService(
     {
         var job = await repo.GetByIdAsync(id, ct) ?? throw new JobNotFoundException(id);
         var automation = await automationRepo.GetByIdAsync(job.AutomationId, ct);
-        
+
         return new JobResponse(
             job.Id, job.AutomationId, automation?.Name ?? "Unknown", job.HostGroupId,
             job.HostId, job.Status, job.Message, job.CreatedAt, job.UpdatedAt
@@ -74,8 +74,7 @@ public class JobService(
                 JobId: job.Id,
                 HostId: job.HostId!.Value,
                 RequestedAt: DateTimeOffset.UtcNow
-            ), null, ct);
-
+            ), ct: ct);
         }
     }
 
@@ -84,7 +83,7 @@ public class JobService(
         var job = await repo.GetByIdAsync(id, ct) ?? throw new JobNotFoundException(id);
 
         if (job.Status != JobStatus.Pending)
-            throw new DomainException("Only pending jobs can be removed via DELETE. Use POST /cancel for running jobs.");
+            throw new InvalidAutomationException("Only pending jobs can be removed via DELETE. Use POST /cancel for running jobs.");
 
         job.Transition(JobStatus.Removed);
         await repo.SaveAsync(job, ct);

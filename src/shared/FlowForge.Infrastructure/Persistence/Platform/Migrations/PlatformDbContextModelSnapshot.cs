@@ -17,7 +17,7 @@ namespace FlowForge.Infrastructure.Persistence.Platform.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.0")
+                .HasAnnotation("ProductVersion", "10.0.0")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -28,18 +28,21 @@ namespace FlowForge.Infrastructure.Persistence.Platform.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ConditionRoot")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("DefaultParametersJson")
-                        .IsRequired()
-                        .HasColumnType("text");
 
                     b.Property<string>("Description")
                         .HasColumnType("text");
 
                     b.Property<Guid>("HostGroupId")
                         .HasColumnType("uuid");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -49,9 +52,6 @@ namespace FlowForge.Infrastructure.Persistence.Platform.Migrations
                     b.Property<string>("TaskId")
                         .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<string>("TriggerCondition")
-                        .HasColumnType("jsonb");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -107,15 +107,22 @@ namespace FlowForge.Infrastructure.Persistence.Platform.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<int>("Type")
-                        .HasColumnType("integer");
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("TypeId")
+                        .IsRequired()
+                        .HasColumnType("varchar(100)");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("AutomationId");
+                    b.HasIndex("AutomationId", "Name")
+                        .IsUnique();
 
                     b.ToTable("Triggers");
                 });

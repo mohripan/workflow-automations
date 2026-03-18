@@ -18,7 +18,7 @@ namespace FlowForge.Infrastructure.Persistence.Jobs.Migrations
                     Id = table.Column<Guid>(type: "uuid", nullable: false),
                     AutomationId = table.Column<Guid>(type: "uuid", nullable: false),
                     TaskId = table.Column<string>(type: "text", nullable: false),
-                    ParametersJson = table.Column<string>(type: "text", nullable: false),
+                    ConnectionId = table.Column<string>(type: "text", nullable: false),
                     HostGroupId = table.Column<Guid>(type: "uuid", nullable: false),
                     HostId = table.Column<Guid>(type: "uuid", nullable: true),
                     Status = table.Column<int>(type: "integer", nullable: false),

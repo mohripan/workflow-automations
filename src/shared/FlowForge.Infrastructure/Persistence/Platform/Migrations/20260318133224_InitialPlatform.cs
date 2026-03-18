@@ -19,9 +19,9 @@ namespace FlowForge.Infrastructure.Persistence.Platform.Migrations
                     Name = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
                     Description = table.Column<string>(type: "text", nullable: true),
                     TaskId = table.Column<string>(type: "text", nullable: false),
-                    DefaultParametersJson = table.Column<string>(type: "text", nullable: false),
                     HostGroupId = table.Column<Guid>(type: "uuid", nullable: false),
-                    TriggerCondition = table.Column<string>(type: "jsonb", nullable: true),
+                    IsEnabled = table.Column<bool>(type: "boolean", nullable: false),
+                    ConditionRoot = table.Column<string>(type: "jsonb", nullable: false),
                     CreatedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     UpdatedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
                 },
@@ -67,9 +67,10 @@ namespace FlowForge.Infrastructure.Persistence.Platform.Migrations
                 columns: table => new
                 {
                     Id = table.Column<Guid>(type: "uuid", nullable: false),
-                    Type = table.Column<int>(type: "integer", nullable: false),
-                    ConfigJson = table.Column<string>(type: "jsonb", nullable: false),
                     AutomationId = table.Column<Guid>(type: "uuid", nullable: false),
+                    Name = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
+                    TypeId = table.Column<string>(type: "varchar(100)", nullable: false),
+                    ConfigJson = table.Column<string>(type: "jsonb", nullable: false),
                     CreatedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     UpdatedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
                 },
@@ -91,9 +92,10 @@ namespace FlowForge.Infrastructure.Persistence.Platform.Migrations
                 unique: true);
 
             migrationBuilder.CreateIndex(
-                name: "IX_Triggers_AutomationId",
+                name: "IX_Triggers_AutomationId_Name",
                 table: "Triggers",
-                column: "AutomationId");
+                columns: new[] { "AutomationId", "Name" },
+                unique: true);
         }
 
         /// <inheritdoc />

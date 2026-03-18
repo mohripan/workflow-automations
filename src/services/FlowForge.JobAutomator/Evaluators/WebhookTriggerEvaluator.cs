@@ -1,24 +1,22 @@
 using FlowForge.Contracts.Events;
-using FlowForge.Domain.Enums;
+using FlowForge.Domain.Triggers;
 using FlowForge.Infrastructure.Caching;
+using Microsoft.Extensions.Logging;
 
 namespace FlowForge.JobAutomator.Evaluators;
 
-public class WebhookTriggerEvaluator(IRedisService redis) : ITriggerEvaluator
+public class WebhookTriggerEvaluator(IRedisService redis, ILogger<WebhookTriggerEvaluator> logger) : ITriggerEvaluator
 {
-    public TriggerType Type => TriggerType.Webhook;
+    public string TypeId => TriggerTypes.Webhook;
 
     public async Task<bool> EvaluateAsync(TriggerSnapshot trigger, CancellationToken ct)
     {
-        var firedKey = $"trigger:webhook:{trigger.Id}:fired";
-        var fired = await redis.GetAsync(firedKey);
-        
-        if (fired != null)
-        {
-            await redis.DeleteAsync(firedKey);
-            return true;
-        }
+        var key = $"trigger:webhook:{trigger.Id}:fired";
+        var fired = await redis.GetAsync(key);
+        if (fired is null) return false;
 
-        return false;
+        await redis.DeleteAsync(key);
+        logger.LogDebug("Webhook trigger '{TriggerName}' consumed fired flag", trigger.Name);
+        return true;
     }
 }
