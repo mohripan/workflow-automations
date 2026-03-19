@@ -24,7 +24,7 @@ This document tracks planned improvements to FlowForge. Each item includes the m
 | 4 | [Transactional Outbox Pattern](#4-transactional-outbox-pattern) | Reliability | `[x]` |
 | 5 | [OpenTelemetry Distributed Tracing](#5-opentelemetry-distributed-tracing) | Observability | `[x]` |
 | 6 | [Quartz Clustering](#6-quartz-clustering) | Scalability | `[x]` |
-| 7 | [Startup Resilience for AutomationCacheInitializer](#7-startup-resilience-for-automationcacheinitializer) | Reliability | `[ ]` |
+| 7 | [Startup Resilience for AutomationCacheInitializer](#7-startup-resilience-for-automationcacheinitializer) | Reliability | `[x]` |
 
 ---
 

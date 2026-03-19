@@ -12,26 +12,51 @@ public class AutomationCacheInitializer(
     IQuartzScheduleSync scheduleSync,
     ILogger<AutomationCacheInitializer> logger) : IHostedService
 {
+    private static readonly int[] BackoffSeconds = [2, 4, 8, 16, 30];
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         logger.LogInformation("Initializing AutomationCache...");
-        
+
         using var scope = scopeFactory.CreateScope();
         var apiClient = scope.ServiceProvider.GetRequiredService<IAutomationApiClient>();
-        
-        try
+
+        var attempt = 0;
+
+        while (!cancellationToken.IsCancellationRequested)
         {
-            var snapshots = await apiClient.GetSnapshotsAsync(cancellationToken);
-            foreach (var snapshot in snapshots)
+            try
             {
-                cache.Upsert(snapshot);
-                await scheduleSync.SyncAsync(snapshot, cancellationToken);
+                var snapshots = await apiClient.GetSnapshotsAsync(cancellationToken);
+                foreach (var snapshot in snapshots)
+                {
+                    cache.Upsert(snapshot);
+                    await scheduleSync.SyncAsync(snapshot, cancellationToken);
+                }
+                logger.LogInformation("AutomationCache initialized with {Count} automations.", snapshots.Count);
+                return;
             }
-            logger.LogInformation("AutomationCache initialized with {Count} snapshots.", snapshots.Count);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to initialize AutomationCache.");
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                var delay = BackoffSeconds[Math.Min(attempt, BackoffSeconds.Length - 1)];
+                logger.LogWarning(ex,
+                    "AutomationCache initialization failed (attempt {Attempt}); retrying in {Delay}s.",
+                    attempt + 1, delay);
+                attempt++;
+
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(delay), cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
         }
     }
 
