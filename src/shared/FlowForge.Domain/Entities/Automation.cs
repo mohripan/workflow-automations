@@ -12,7 +12,9 @@ public class Automation : BaseEntity<Guid>
     public bool IsEnabled { get; private set; }
     public Guid? ActiveJobId { get; private set; }
     public TriggerConditionNode ConditionRoot { get; private set; } = default!;
-    public IReadOnlyList<Trigger> Triggers { get; private set; } = [];
+
+    private List<Trigger> _triggers = [];
+    public IReadOnlyList<Trigger> Triggers => _triggers;
 
     private Automation() { }
 
@@ -39,7 +41,7 @@ public class Automation : BaseEntity<Guid>
             TaskId = taskId,
             HostGroupId = hostGroupId,
             IsEnabled = true,
-            Triggers = triggers,
+            _triggers = triggers,
             ConditionRoot = conditionRoot
         };
     }
@@ -63,7 +65,7 @@ public class Automation : BaseEntity<Guid>
         Description = description;
         TaskId = taskId;
         HostGroupId = hostGroupId;
-        Triggers = triggers;
+        _triggers = triggers;
         ConditionRoot = conditionRoot;
         UpdateTimestamp();
     }

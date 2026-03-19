@@ -20,6 +20,8 @@ public class AutomationConfiguration : IEntityTypeConfiguration<Automation>
             .HasForeignKey(x => x.AutomationId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        builder.Navigation(x => x.Triggers).HasField("_triggers").UsePropertyAccessMode(PropertyAccessMode.Field);
+
         builder.Property(x => x.ConditionRoot)
             .HasColumnType("jsonb")
             .HasConversion(
