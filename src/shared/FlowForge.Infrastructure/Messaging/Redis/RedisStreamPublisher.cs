@@ -16,14 +16,5 @@ public class RedisStreamPublisher(IConnectionMultiplexer redis) : IMessagePublis
         await _db.StreamAddAsync(streamName, "payload", json);
     }
 
-    private static string GetStreamName<TEvent>() => typeof(TEvent).Name switch
-    {
-        "AutomationTriggeredEvent" => StreamNames.AutomationTriggered,
-        "AutomationChangedEvent" => StreamNames.AutomationChanged,
-        "JobCreatedEvent" => StreamNames.JobCreated,
-        "JobAssignedEvent" => StreamNames.JobAssigned,
-        "JobStatusChangedEvent" => StreamNames.JobStatusChanged,
-        "JobCancelRequestedEvent" => StreamNames.JobCancelRequested,
-        _ => throw new ArgumentException($"Unknown event type: {typeof(TEvent).Name}")
-    };
+    private static string GetStreamName<TEvent>() => StreamNames.ForEventType(typeof(TEvent).Name);
 }

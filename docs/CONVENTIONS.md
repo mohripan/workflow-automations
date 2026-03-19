@@ -213,24 +213,21 @@ public interface IRedisService
 
 ### Transactional Event Publishing (Outbox Pattern)
 
-> **Planned — see ROADMAP.md #4.** Currently, services call `IMessagePublisher.PublishAsync` directly after saving to the database. These are two separate I/O operations with no atomicity guarantee: a process crash between them leaves the DB updated but the event undelivered, causing permanent cache staleness in dependent services.
->
-> **Planned convention:** For events that must be delivered reliably alongside a DB mutation (e.g. `AutomationChangedEvent`, `JobCreatedEvent`), use an **Outbox Writer** instead of calling `IMessagePublisher` directly from the service layer:
->
-> ```csharp
-> // Instead of: await publisher.PublishAsync(new AutomationChangedEvent(...), ct: ct);
-> await outboxWriter.WriteAsync(new AutomationChangedEvent(...), ct);
-> ```
->
-> The `OutboxWriter` writes a serialized `OutboxMessage` row to the same `PlatformDbContext` transaction. A separate `OutboxRelayWorker` polls `OutboxMessages WHERE SentAt IS NULL`, publishes each to Redis, then marks `SentAt`. Consumers must tolerate duplicate delivery (they already do via Redis consumer group `XACK`).
->
-> Direct `IMessagePublisher` calls remain valid for fire-and-forget cases where delivery is best-effort (e.g. heartbeats, diagnostics).
+For events that must be delivered reliably alongside a DB mutation (e.g. `AutomationChangedEvent`, `JobCreatedEvent`), use `IOutboxWriter` instead of calling `IMessagePublisher` directly from the service layer:
+
+```csharp
+// Instead of: await publisher.PublishAsync(new AutomationChangedEvent(...), ct: ct);
+await outboxWriter.WriteAsync(new AutomationChangedEvent(...), ct);
+await automationRepo.SaveAsync(automation, ct);  // commits entity change + outbox message atomically
+```
+
+`OutboxWriter.WriteAsync` adds an `OutboxMessage` row to the shared `PlatformDbContext` change tracker **without calling `SaveChangesAsync`**. The subsequent repository `SaveAsync` (or `DeleteAsync`) commits both the entity mutation and the outbox entry in the same database transaction. `OutboxRelayWorker` polls `OutboxMessages WHERE SentAt IS NULL` every 500 ms, writes directly to the Redis Stream (`XADD`), then marks `SentAt`. Consumers tolerate duplicate delivery via Redis consumer group `XACK`.
+
+Direct `IMessagePublisher` calls remain valid for fire-and-forget cases where delivery is best-effort (e.g. heartbeats, diagnostics).
 
 ### Redis Consumer Group Bootstrap
 
-> **Planned — see ROADMAP.md #1.** Every service that consumes a Redis Stream must ensure its consumer group exists before it begins consuming. Redis requires `XGROUP CREATE {stream} {group} $ MKSTREAM` to be called once; subsequent calls with an existing group return a `BUSYGROUP` error which should be swallowed.
->
-> **Convention:** Each service's `Program.cs` calls `IStreamBootstrapper.EnsureAsync(streamName, groupName)` for every stream+group it reads, during startup, before any `BackgroundService` begins consuming. Use `$` as the starting offset — **not `0`** — to avoid re-delivering historical messages on every restart.
+Every service that consumes a Redis Stream must ensure its consumer group exists before it begins consuming. Each service's `Program.cs` calls `IStreamBootstrapper.EnsureAsync(streamName, groupName)` for every stream+group it reads, during startup, before any `BackgroundService` begins consuming. The bootstrapper calls `XGROUP CREATE {stream} {group} $ MKSTREAM` and swallows `BUSYGROUP` errors — idempotent on every restart. Always use `$` as the starting offset — **not `0`** — to avoid re-delivering historical messages.
 
 ### Stream Name Constants
 

@@ -35,6 +35,7 @@ builder.Services.AddSignalR();
 // Add Background Workers
 builder.Services.AddHostedService<AutomationTriggeredConsumer>();
 builder.Services.AddHostedService<JobStatusChangedConsumer>();
+builder.Services.AddHostedService<OutboxRelayWorker>();
 
 // Add CORS
 builder.Services.AddCors(options => 

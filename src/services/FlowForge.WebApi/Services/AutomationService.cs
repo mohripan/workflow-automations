@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FlowForge.Contracts.Events;
 using FlowForge.Domain.Entities;
 using FlowForge.Domain.Exceptions;
@@ -5,7 +6,7 @@ using FlowForge.Domain.Repositories;
 using FlowForge.Domain.Triggers;
 using FlowForge.Domain.ValueObjects;
 using FlowForge.Infrastructure.Caching;
-using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.WebApi.DTOs.Requests;
 using FlowForge.WebApi.DTOs.Responses;
 
@@ -15,7 +16,7 @@ public class AutomationService(
     IAutomationRepository automationRepo,
     IHostGroupRepository hostGroupRepo,
     ITriggerTypeRegistry registry,
-    IMessagePublisher publisher,
+    IOutboxWriter outboxWriter,
     IRedisService redis) : IAutomationService
 {
     public async Task<PagedResult<AutomationResponse>> GetAllAsync(AutomationQueryParams query, CancellationToken ct)
@@ -61,10 +62,9 @@ public class AutomationService(
             triggers: triggers,
             conditionRoot: conditionRoot);
 
-        await automationRepo.SaveAsync(automation, ct);
-
         var snapshot = await MapToSnapshotAsync(automation, ct);
-        await publisher.PublishAsync(new AutomationChangedEvent(automation.Id, ChangeType.Created, snapshot), ct: ct);
+        await outboxWriter.WriteAsync(new AutomationChangedEvent(automation.Id, ChangeType.Created, snapshot), ct);
+        await automationRepo.SaveAsync(automation, ct);
 
         return MapToResponse(automation);
     }
@@ -84,10 +84,9 @@ public class AutomationService(
 
         automation.Update(request.Name, request.Description, request.TaskId, request.HostGroupId, triggers, conditionRoot);
 
-        await automationRepo.SaveAsync(automation, ct);
-
         var snapshot = await MapToSnapshotAsync(automation, ct);
-        await publisher.PublishAsync(new AutomationChangedEvent(automation.Id, ChangeType.Updated, snapshot), ct: ct);
+        await outboxWriter.WriteAsync(new AutomationChangedEvent(automation.Id, ChangeType.Updated, snapshot), ct);
+        await automationRepo.SaveAsync(automation, ct);
 
         return MapToResponse(automation);
     }
@@ -96,9 +95,8 @@ public class AutomationService(
     {
         var automation = await automationRepo.GetByIdAsync(id, ct)
             ?? throw new AutomationNotFoundException(id);
+        await outboxWriter.WriteAsync(new AutomationChangedEvent(id, ChangeType.Deleted, null), ct);
         await automationRepo.DeleteAsync(automation, ct);
-
-        await publisher.PublishAsync(new AutomationChangedEvent(id, ChangeType.Deleted, null), ct: ct);
     }
 
     public async Task EnableAsync(Guid id, CancellationToken ct)
@@ -106,10 +104,10 @@ public class AutomationService(
         var automation = await automationRepo.GetByIdAsync(id, ct)
             ?? throw new AutomationNotFoundException(id);
         automation.Enable();
-        await automationRepo.SaveAsync(automation, ct);
 
         var snapshot = await MapToSnapshotAsync(automation, ct);
-        await publisher.PublishAsync(new AutomationChangedEvent(automation.Id, ChangeType.Updated, snapshot), ct: ct);
+        await outboxWriter.WriteAsync(new AutomationChangedEvent(automation.Id, ChangeType.Updated, snapshot), ct);
+        await automationRepo.SaveAsync(automation, ct);
     }
 
     public async Task DisableAsync(Guid id, CancellationToken ct)
@@ -117,10 +115,10 @@ public class AutomationService(
         var automation = await automationRepo.GetByIdAsync(id, ct)
             ?? throw new AutomationNotFoundException(id);
         automation.Disable();
-        await automationRepo.SaveAsync(automation, ct);
 
         var snapshot = await MapToSnapshotAsync(automation, ct);
-        await publisher.PublishAsync(new AutomationChangedEvent(automation.Id, ChangeType.Updated, snapshot), ct: ct);
+        await outboxWriter.WriteAsync(new AutomationChangedEvent(automation.Id, ChangeType.Updated, snapshot), ct);
+        await automationRepo.SaveAsync(automation, ct);
     }
 
     public async Task FireWebhookAsync(Guid id, string? secret, CancellationToken ct)
@@ -133,6 +131,16 @@ public class AutomationService(
 
         var webhookTrigger = automation.Triggers.FirstOrDefault(t => t.TypeId == TriggerTypes.Webhook)
             ?? throw new InvalidAutomationException("Automation does not have a webhook trigger.");
+
+        var config = JsonSerializer.Deserialize<WebhookTriggerConfig>(webhookTrigger.ConfigJson);
+        if (!string.IsNullOrEmpty(config?.SecretHash))
+        {
+            if (string.IsNullOrEmpty(secret))
+                throw new UnauthorizedWebhookException(id);
+
+            if (!BCrypt.Net.BCrypt.Verify(secret, config.SecretHash))
+                throw new UnauthorizedWebhookException(id);
+        }
 
         await redis.SetAsync(
             key: $"trigger:webhook:{webhookTrigger.Id}:fired",
@@ -207,4 +215,6 @@ public class AutomationService(
         TriggerName: r.TriggerName,
         Nodes: r.Nodes?.Select(MapConditionNode).ToList()
     );
+
+    private record WebhookTriggerConfig(string? SecretHash);
 }

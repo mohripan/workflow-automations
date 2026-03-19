@@ -9,6 +9,7 @@ public class PlatformDbContext(DbContextOptions<PlatformDbContext> options) : Db
     public DbSet<Trigger> Triggers => Set<Trigger>();
     public DbSet<WorkflowHost> WorkflowHosts => Set<WorkflowHost>();
     public DbSet<HostGroup> HostGroups => Set<HostGroup>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

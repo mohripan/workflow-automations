@@ -13,6 +13,7 @@ public class AutomationConfiguration : IEntityTypeConfiguration<Automation>
         builder.HasKey(x => x.Id);
         builder.Property(x => x.Name).IsRequired().HasMaxLength(200);
         builder.Property(x => x.IsEnabled).IsRequired();
+        builder.Property(x => x.ActiveJobId);
 
         builder.HasMany(x => x.Triggers)
             .WithOne()

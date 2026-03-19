@@ -1,4 +1,5 @@
 using FlowForge.Contracts.Events;
+using FlowForge.Domain.Enums;
 using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.Redis;
@@ -33,8 +34,20 @@ public class JobStatusChangedConsumer(
 
                 job.Transition(@event.Status);
                 if (@event.Message is not null) job.SetMessage(@event.Message);
-                
+
                 await jobRepo.SaveAsync(job, stoppingToken);
+
+                // Clear ActiveJobId on the automation when job reaches a terminal status
+                if (@event.Status.IsTerminal())
+                {
+                    var automationRepo = scope.ServiceProvider.GetRequiredService<IAutomationRepository>();
+                    var automation = await automationRepo.GetByIdAsync(@event.AutomationId, stoppingToken);
+                    if (automation is not null)
+                    {
+                        automation.ClearActiveJob();
+                        await automationRepo.SaveAsync(automation, stoppingToken);
+                    }
+                }
 
                 await hubContext.Clients
                     .Group($"job:{job.Id}")

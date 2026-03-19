@@ -1,15 +1,16 @@
 using FlowForge.Contracts.Events;
 using FlowForge.Domain.Entities;
+using FlowForge.Domain.Enums;
 using FlowForge.Domain.Exceptions;
 using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.Infrastructure.Messaging.Redis;
 
 namespace FlowForge.WebApi.Workers;
 
 public class AutomationTriggeredConsumer(
     IMessageConsumer consumer,
-    IMessagePublisher publisher,
     IServiceScopeFactory scopeFactory,
     ILogger<AutomationTriggeredConsumer> logger) : BackgroundService
 {
@@ -23,6 +24,7 @@ public class AutomationTriggeredConsumer(
                 using var scope = scopeFactory.CreateScope();
                 var automationRepo = scope.ServiceProvider.GetRequiredService<IAutomationRepository>();
                 var hostGroupRepo = scope.ServiceProvider.GetRequiredService<IHostGroupRepository>();
+                var outboxWriter = scope.ServiceProvider.GetRequiredService<IOutboxWriter>();
 
                 var automation = await automationRepo.GetByIdAsync(@event.AutomationId, stoppingToken)
                     ?? throw new AutomationNotFoundException(@event.AutomationId);
@@ -32,6 +34,22 @@ public class AutomationTriggeredConsumer(
 
                 var jobRepo = scope.ServiceProvider.GetRequiredKeyedService<IJobRepository>(hostGroup.ConnectionId);
 
+                // Duplicate job prevention
+                if (automation.ActiveJobId is Guid activeJobId)
+                {
+                    var activeJob = await jobRepo.GetByIdAsync(activeJobId, stoppingToken);
+                    if (activeJob is not null && !activeJob.Status.IsTerminal())
+                    {
+                        logger.LogWarning(
+                            "Automation {AutomationId} already has active job {ActiveJobId} in status {Status}. Skipping duplicate.",
+                            automation.Id, activeJobId, activeJob.Status);
+                        continue;
+                    }
+
+                    // Job is terminal or missing — clear stale reference before proceeding
+                    automation.ClearActiveJob();
+                }
+
                 var job = Job.Create(
                     automationId: automation.Id,
                     taskId: automation.TaskId,
@@ -39,15 +57,16 @@ public class AutomationTriggeredConsumer(
                     hostGroupId: automation.HostGroupId,
                     triggeredAt: @event.TriggeredAt);
 
-                await jobRepo.SaveAsync(job, stoppingToken);
-
-                await publisher.PublishAsync(new JobCreatedEvent(
+                automation.SetActiveJob(job.Id);
+                await outboxWriter.WriteAsync(new JobCreatedEvent(
                     JobId: job.Id,
                     ConnectionId: hostGroup.ConnectionId,
                     AutomationId: job.AutomationId,
                     HostGroupId: job.HostGroupId,
                     CreatedAt: job.CreatedAt
-                ), ct: stoppingToken);
+                ), stoppingToken);
+                await automationRepo.SaveAsync(automation, stoppingToken);  // commits automation + outbox message
+                await jobRepo.SaveAsync(job, stoppingToken);
 
                 logger.LogInformation("Job {JobId} created for automation {AutomationId}", job.Id, automation.Id);
             }

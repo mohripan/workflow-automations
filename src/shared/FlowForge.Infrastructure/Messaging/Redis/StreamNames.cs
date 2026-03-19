@@ -10,4 +10,15 @@ public static class StreamNames
     public const string JobCancelRequested = "flowforge:job-cancel-requested";
 
     public static string HostStream(string hostId) => $"flowforge:host:{hostId}";
+
+    public static string ForEventType(string typeName) => typeName switch
+    {
+        "AutomationTriggeredEvent" => AutomationTriggered,
+        "AutomationChangedEvent"   => AutomationChanged,
+        "JobCreatedEvent"          => JobCreated,
+        "JobAssignedEvent"         => JobAssigned,
+        "JobStatusChangedEvent"    => JobStatusChanged,
+        "JobCancelRequestedEvent"  => JobCancelRequested,
+        _ => throw new ArgumentException($"Unknown event type: {typeName}")
+    };
 }

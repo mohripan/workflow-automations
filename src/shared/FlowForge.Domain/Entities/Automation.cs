@@ -10,6 +10,7 @@ public class Automation : BaseEntity<Guid>
     public string TaskId { get; private set; } = default!;
     public Guid HostGroupId { get; private set; }
     public bool IsEnabled { get; private set; }
+    public Guid? ActiveJobId { get; private set; }
     public TriggerConditionNode ConditionRoot { get; private set; } = default!;
     public IReadOnlyList<Trigger> Triggers { get; private set; } = [];
 
@@ -76,6 +77,18 @@ public class Automation : BaseEntity<Guid>
     public void Disable()
     {
         IsEnabled = false;
+        UpdateTimestamp();
+    }
+
+    public void SetActiveJob(Guid jobId)
+    {
+        ActiveJobId = jobId;
+        UpdateTimestamp();
+    }
+
+    public void ClearActiveJob()
+    {
+        ActiveJobId = null;
         UpdateTimestamp();
     }
 

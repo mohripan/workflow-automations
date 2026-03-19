@@ -25,6 +25,9 @@ public class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Exception
             JobNotFoundException or AutomationNotFoundException
                 => (StatusCodes.Status404NotFound, "Resource not found"),
 
+            UnauthorizedWebhookException
+                => (StatusCodes.Status401Unauthorized, "Unauthorized"),
+
             InvalidJobTransitionException or DomainException
                 => (StatusCodes.Status422UnprocessableEntity, "Business rule violation"),
 

@@ -585,7 +585,7 @@ All keys use the trigger's **GUID** (`trigger.Id`) for internal stability. `trig
 
 ## Redis Consumer Group Bootstrap
 
-> **Planned (ROADMAP #1):** `AutomationCacheSyncWorker` calls `XREADGROUP` on startup. Redis requires the consumer group to exist (created via `XGROUP CREATE ... MKSTREAM`) before any `XREADGROUP` call. On a fresh Redis instance, this causes an immediate `NOGROUP` crash. The fix is an `IStreamBootstrapper.EnsureAsync(streamName, groupName)` call in `Program.cs` before consumers start. This is idempotent — if the group already exists (`BUSYGROUP`), the error is swallowed. Always use `$` (not `0`) as the starting offset to avoid re-delivering historical messages.
+`Program.cs` calls `IStreamBootstrapper.EnsureAsync(streamName, groupName)` for every stream this service reads (`AutomationChanged` / `job-automator`, `JobStatusChanged` / `job-automator-flags`) before any `BackgroundService` starts consuming. The bootstrapper calls `XGROUP CREATE ... MKSTREAM $` and swallows `BUSYGROUP` errors — making it safe to call on every startup regardless of Redis state.
 
 ---
 

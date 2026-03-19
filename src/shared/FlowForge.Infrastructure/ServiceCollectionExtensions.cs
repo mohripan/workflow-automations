@@ -1,5 +1,6 @@
 using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.Infrastructure.Caching;
 using FlowForge.Infrastructure.Persistence.Platform;
 using FlowForge.Infrastructure.Persistence.Jobs;
@@ -44,6 +45,7 @@ public static class ServiceCollectionExtensions
         services.AddDbContext<PlatformDbContext>(options =>
             options.UseNpgsql(config.GetConnectionString("DefaultConnection")));
 
+        services.AddScoped<IOutboxWriter, OutboxWriter>();
         services.AddScoped<IAutomationRepository, AutomationRepository>();
         services.AddScoped<IHostGroupRepository, HostGroupRepository>();
         services.AddScoped<IWorkflowHostRepository, WorkflowHostRepository>();
