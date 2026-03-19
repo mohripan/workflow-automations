@@ -45,6 +45,19 @@ services:
       - "6379:6379"
     command: ["redis-server", "--appendonly", "yes"]
 
+  postgres-quartz:
+    image: postgres:17-alpine
+    container_name: flowforge-db-quartz
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: flowforge_quartz
+    ports:
+      - "5435:5432"
+    volumes:
+      - flowforge-db-quartz-data:/var/lib/postgresql/data
+      - ./quartz-postgresql.sql:/docker-entrypoint-initdb.d/quartz-postgresql.sql:ro
+
   jaeger:
     image: jaegertracing/all-in-one:latest
     container_name: flowforge-jaeger
@@ -58,3 +71,4 @@ volumes:
   flowforge-db-platform-data:
   flowforge-db-minion-data:
   flowforge-db-titan-data:
+  flowforge-db-quartz-data:

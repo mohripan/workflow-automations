@@ -10,6 +10,7 @@ using FlowForge.JobAutomator.Workers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Quartz;
+using Quartz.Impl.AdoJobStore;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -25,8 +26,29 @@ builder.Services.AddHttpClient<IAutomationApiClient, AutomationApiClient>(client
 builder.Services.AddSingleton<AutomationCache>();
 builder.Services.AddSingleton<IQuartzScheduleSync, QuartzScheduleSync>();
 
-// Quartz
-builder.Services.AddQuartz();
+// Quartz — clustered PostgreSQL job store
+var quartzConnString = builder.Configuration.GetConnectionString("QuartzConnection")
+    ?? throw new ArgumentNullException("QuartzConnection");
+
+builder.Services.AddQuartz(q =>
+{
+    q.SchedulerId = "AUTO";
+    q.SchedulerName = "FlowForgeScheduler";
+    q.UsePersistentStore(store =>
+    {
+        store.UseProperties = true;
+        store.UseGenericDatabase("Npgsql", db =>
+        {
+            db.ConnectionString = quartzConnString;
+            db.UseDriverDelegate<PostgreSQLDelegate>();
+        });
+        store.UseNewtonsoftJsonSerializer();
+        store.UseClustering(c =>
+        {
+            c.CheckinInterval = TimeSpan.FromSeconds(10);
+        });
+    });
+});
 builder.Services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
 
 // CustomScript options
