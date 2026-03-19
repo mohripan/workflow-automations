@@ -18,7 +18,7 @@ This document tracks planned improvements to FlowForge. Each item includes the m
 
 | # | Title | Area | Status |
 |---|---|---|---|
-| 1 | [Redis Consumer Group Bootstrap](#1-redis-consumer-group-bootstrap) | Bug / Reliability | `[ ]` |
+| 1 | [Redis Consumer Group Bootstrap](#1-redis-consumer-group-bootstrap) | Bug / Reliability | `[x]` |
 | 2 | [Webhook Secret Validation](#2-webhook-secret-validation) | Security | `[ ]` |
 | 3 | [Duplicate Job Prevention](#3-duplicate-job-prevention) | Business Logic | `[ ]` |
 | 4 | [Transactional Outbox Pattern](#4-transactional-outbox-pattern) | Reliability | `[ ]` |

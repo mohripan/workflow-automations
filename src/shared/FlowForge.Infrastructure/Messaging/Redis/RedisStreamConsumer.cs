@@ -20,7 +20,7 @@ public class RedisStreamConsumer(IConnectionMultiplexer redis) : IMessageConsume
         // Ensure consumer group exists
         try
         {
-            await _db.StreamCreateConsumerGroupAsync(streamName, consumerGroup, "0-0", createStream: true);
+            await _db.StreamCreateConsumerGroupAsync(streamName, consumerGroup, "$", createStream: true);
         }
         catch (RedisServerException ex) when (ex.Message.Contains("BUSYGROUP"))
         {

@@ -1,4 +1,6 @@
 using FlowForge.Infrastructure;
+using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.WebApi.Hubs;
 using FlowForge.WebApi.Middleware;
 using FlowForge.WebApi.Services;
@@ -49,6 +51,11 @@ using (var scope = app.Services.CreateScope())
 {
     await FlowForge.Infrastructure.Persistence.DatabaseInitializer.InitializeDatabasesAsync(scope.ServiceProvider);
 }
+
+// Bootstrap Redis consumer groups
+var bootstrapper = app.Services.GetRequiredService<IStreamBootstrapper>();
+await bootstrapper.EnsureAsync(StreamNames.AutomationTriggered, "webapi");
+await bootstrapper.EnsureAsync(StreamNames.JobStatusChanged, "webapi");
 
 // Middleware
 if (app.Environment.IsDevelopment())

@@ -1,4 +1,6 @@
 using FlowForge.Infrastructure;
+using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.JobAutomator.Cache;
 using FlowForge.JobAutomator.Clients;
 using FlowForge.JobAutomator.Evaluators;
@@ -44,4 +46,10 @@ builder.Services.AddHostedService<JobCompletedFlagWorker>();
 builder.Services.AddHostedService<AutomationWorker>();
 
 var host = builder.Build();
+
+// Bootstrap Redis consumer groups
+var bootstrapper = host.Services.GetRequiredService<IStreamBootstrapper>();
+await bootstrapper.EnsureAsync(StreamNames.AutomationChanged, "job-automator");
+await bootstrapper.EnsureAsync(StreamNames.JobStatusChanged, "job-automator-flags");
+
 host.Run();

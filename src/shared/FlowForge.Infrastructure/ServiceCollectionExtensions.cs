@@ -33,6 +33,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(redisConnString));
         services.AddSingleton<IMessagePublisher, RedisStreamPublisher>();
         services.AddSingleton<IMessageConsumer, RedisStreamConsumer>();
+        services.AddSingleton<IStreamBootstrapper, RedisStreamBootstrapper>();
         services.AddSingleton<IRedisService, RedisService>();
         return services;
     }
