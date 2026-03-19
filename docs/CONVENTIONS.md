@@ -251,16 +251,16 @@ public static class StreamNames
 
 ### Observability (OpenTelemetry)
 
-> **Planned — see ROADMAP.md #5.** Each service will have an `ActivitySource` named `FlowForge.{ServiceName}` (e.g. `FlowForge.WebApi`, `FlowForge.JobAutomator`). Trace context is propagated through Redis Stream messages as an extra `traceparent` field injected by `RedisStreamPublisher` and extracted by `RedisStreamConsumer`.
->
-> **Span naming conventions:**
-> - `publish {StreamName}` — outgoing stream messages
-> - `consume {StreamName}` — incoming stream messages
-> - `evaluate automation {AutomationId}` — in `AutomationWorker`
-> - `dispatch job {JobId}` — in `JobDispatcherWorker`
-> - `execute job {JobId}` — in `WorkflowEngine`
->
-> The OpenTelemetry `TraceId` serves as the correlation ID across all services — no separate correlation field is needed on events.
+Each service has an `ActivitySource` named `FlowForge.{ServiceName}` (e.g. `FlowForge.WebApi`, `FlowForge.JobAutomator`). Trace context is propagated through Redis Stream messages as an extra `traceparent` field injected by `RedisStreamPublisher` and extracted by `RedisStreamConsumer`. All services register with `AddFlowForgeTelemetry(config, serviceName)` which wires up the OTLP exporter to Jaeger.
+
+**Span naming conventions:**
+- `publish {StreamName}` — outgoing stream messages
+- `consume {StreamName}` — incoming stream messages
+- `evaluate automation {AutomationId}` — in `AutomationWorker`
+- `dispatch job {JobId}` — in `JobDispatcherWorker`
+- `execute job {JobId}` — in `WorkflowEngine`
+
+The OpenTelemetry `TraceId` serves as the correlation ID across all services — no separate correlation field is needed on events.
 
 ---
 

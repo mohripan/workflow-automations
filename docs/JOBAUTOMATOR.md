@@ -94,33 +94,55 @@ public record TriggerSnapshot(
 
 ## Startup: One-Time HTTP Snapshot
 
-> **Planned (ROADMAP #7 — Startup Resilience):** `AutomationCacheInitializer.StartAsync` currently throws on any HTTP failure, crashing the entire `JobAutomator` process. In Kubernetes this triggers a pod restart loop. The fix is to wrap the API call in a `Polly` retry loop with exponential backoff (2s → 4s → 8s → 16s → max 30s), retrying until the fetch succeeds or the host cancellation token fires. Use `Microsoft.Extensions.Http.Resilience` configured on `IAutomationApiClient`'s `HttpClient` registration.
+`AutomationCacheInitializer.StartAsync` retries the API call with exponential backoff (`[2, 4, 8, 16, 30]` seconds) until it succeeds or the host cancellation token fires. This prevents pod crash-loops in Kubernetes when the Web API is still starting up.
 
 ```csharp
 public class AutomationCacheInitializer(
-    IAutomationApiClient apiClient,
+    IServiceScopeFactory scopeFactory,
     AutomationCache cache,
+    IQuartzScheduleSync scheduleSync,
     ILogger<AutomationCacheInitializer> logger) : IHostedService
 {
-    public async Task StartAsync(CancellationToken ct)
+    private static readonly int[] BackoffSeconds = [2, 4, 8, 16, 30];
+
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
-        logger.LogInformation("Seeding automation cache from Web API...");
-        try
+        logger.LogInformation("Initializing AutomationCache...");
+        using var scope = scopeFactory.CreateScope();
+        var apiClient = scope.ServiceProvider.GetRequiredService<IAutomationApiClient>();
+        var attempt = 0;
+
+        while (!cancellationToken.IsCancellationRequested)
         {
-            var automations = await apiClient.GetAllAsync(ct);
-            cache.Seed(automations);
-            logger.LogInformation(
-                "Automation cache seeded with {Count} automations ({EnabledCount} enabled)",
-                automations.Count, automations.Count(a => a.IsEnabled));
-        }
-        catch (Exception ex)
-        {
-            logger.LogCritical(ex, "Failed to seed automation cache. Service cannot start.");
-            throw;
+            try
+            {
+                var snapshots = await apiClient.GetSnapshotsAsync(cancellationToken);
+                foreach (var snapshot in snapshots)
+                {
+                    cache.Upsert(snapshot);
+                    await scheduleSync.SyncAsync(snapshot, cancellationToken);
+                }
+                logger.LogInformation("AutomationCache initialized with {Count} automations.", snapshots.Count);
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                var delay = BackoffSeconds[Math.Min(attempt, BackoffSeconds.Length - 1)];
+                logger.LogWarning(ex,
+                    "AutomationCache initialization failed (attempt {Attempt}); retrying in {Delay}s.",
+                    attempt + 1, delay);
+                attempt++;
+                try { await Task.Delay(TimeSpan.FromSeconds(delay), cancellationToken); }
+                catch (OperationCanceledException) { return; }
+            }
         }
     }
 
-    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 ```
 
@@ -525,11 +547,7 @@ public class TriggerConditionEvaluator(ILogger<TriggerConditionEvaluator> logger
 
 `QuartzScheduleSync` syncs Quartz schedule jobs when the cache changes. It uses `trigger.TypeId == TriggerTypes.Schedule` (string comparison) instead of an enum switch. Disabling an automation removes its Quartz schedules; re-enabling re-registers them. See full implementation in **TRIGGERS.md**.
 
-> **Planned (ROADMAP #6 — Quartz Clustering):** The current Quartz configuration uses an **in-memory job store**. This means:
-> - If the pod crashes, all scheduled jobs are lost until the next restart and cache re-seed.
-> - Scaling `JobAutomator` to 2+ replicas causes duplicate trigger fires (each replica fires independently).
->
-> The fix is to switch to the **Quartz ADO.NET PostgreSQL job store** with `quartz.jobStore.clustered = true`. Quartz's clustering logic ensures only one node in the cluster fires each scheduled job, regardless of replica count. Requires adding `QRTZ_*` tables to a dedicated database (or separate schema in the platform DB). `QuartzScheduleSync` needs no logic changes — clustering is transparent to application code.
+Quartz is configured with the **ADO.NET PostgreSQL job store** and clustering enabled. Only one node in the cluster fires each scheduled trigger regardless of replica count. `QuartzScheduleSync` requires no special handling — clustering is transparent to application code. The dedicated `flowforge_quartz` PostgreSQL database (port 5435) is provisioned by `deploy/docker/compose.yaml` and initialized with `quartz-postgresql.sql`.
 
 ---
 

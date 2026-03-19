@@ -222,13 +222,13 @@ See **ROADMAP.md** for the full list of improvements planned for FlowForge. Summ
 
 | # | Item | Area |
 |---|---|---|
-| 1 | Redis consumer group bootstrap fix | Bug / Reliability |
-| 2 | Webhook secret validation (BCrypt) | Security |
-| 3 | Duplicate job prevention (`ActiveJobId` on Automation) | Business Logic |
-| 4 | Transactional Outbox Pattern | Reliability |
-| 5 | OpenTelemetry distributed tracing | Observability |
-| 6 | Quartz clustering (ADO.NET job store) | Scalability |
-| 7 | Startup resilience for `AutomationCacheInitializer` | Reliability |
+| 1 | Unit & integration test suite | Quality |
+| 2 | Health checks & Kubernetes probes | Reliability |
+| 3 | OpenTelemetry metrics | Observability |
+| 4 | Job timeout enforcement | Reliability |
+| 5 | Dead letter queue for poison messages | Reliability |
+| 6 | Job auto-retry on failure | Business Logic |
+| 7 | Configurable polling intervals via IOptions | Operability |
 
 Each item in ROADMAP.md includes the motivation, affected files, and concrete design decisions to follow during implementation.
 
@@ -239,4 +239,3 @@ Each item in ROADMAP.md includes the motivation, affected files, and concrete de
 - Auth Server / OAuth2
 - Multi-tenancy
 - Reusable named custom trigger definitions (saved scripts shared across automations)
-- Unit & integration test suite (deferred — see ROADMAP.md)
