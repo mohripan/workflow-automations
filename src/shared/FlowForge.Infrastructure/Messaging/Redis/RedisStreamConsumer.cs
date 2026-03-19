@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Telemetry;
 using StackExchange.Redis;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -39,9 +41,19 @@ public class RedisStreamConsumer(IConnectionMultiplexer redis) : IMessageConsume
 
             foreach (var entry in entries)
             {
-                var json = entry.Values.FirstOrDefault(v => v.Name == "payload").Value;
+                var json          = entry.Values.FirstOrDefault(v => v.Name == "payload").Value;
+                var traceparentRv = entry.Values.FirstOrDefault(v => v.Name == "traceparent").Value;
+
                 if (!json.IsNull)
                 {
+                    // Restore trace context propagated from the publisher
+                    ActivityContext parentContext = default;
+                    if (!traceparentRv.IsNull)
+                        ActivityContext.TryParse((string)traceparentRv!, null, out parentContext);
+
+                    using var activity = FlowForgeActivitySources.Messaging.StartActivity(
+                        $"consume {streamName}", ActivityKind.Consumer, parentContext);
+
                     var @event = JsonSerializer.Deserialize<TEvent>((string)json!);
                     if (@event != null)
                     {

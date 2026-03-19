@@ -45,6 +45,15 @@ services:
       - "6379:6379"
     command: ["redis-server", "--appendonly", "yes"]
 
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: flowforge-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC
+
 volumes:
   flowforge-db-platform-data:
   flowforge-db-minion-data:

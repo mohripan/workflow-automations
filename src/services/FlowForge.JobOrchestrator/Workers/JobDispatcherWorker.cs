@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FlowForge.Contracts.Events;
 using FlowForge.Domain.Enums;
 using FlowForge.Domain.Repositories;
@@ -15,6 +16,7 @@ public class JobDispatcherWorker(
     ILoadBalancer loadBalancer,
     ILogger<JobDispatcherWorker> logger) : BackgroundService
 {
+    private static readonly ActivitySource _activitySource = new("FlowForge.JobOrchestrator");
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await foreach (var @event in consumer.ConsumeAsync<JobCreatedEvent>(
@@ -22,6 +24,7 @@ public class JobDispatcherWorker(
         {
             try
             {
+                using var activity = _activitySource.StartActivity($"dispatch job {@event.JobId}");
                 var jobRepo = serviceProvider.GetRequiredKeyedService<IJobRepository>(@event.ConnectionId);
                 var job = await jobRepo.GetByIdAsync(@event.JobId, stoppingToken);
 

@@ -1,7 +1,9 @@
+using System.Diagnostics;
 using System.Text.Json;
 using FlowForge.Domain.Enums;
 using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure;
+using FlowForge.Infrastructure.Telemetry;
 using FlowForge.WorkflowEngine.Handlers;
 using FlowForge.WorkflowEngine.Reporting;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,7 +24,7 @@ var automationId = Guid.Parse(automationIdStr);
 
 var builder = Host.CreateApplicationBuilder(args);
 
-builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddInfrastructure(builder.Configuration, "WorkflowEngine");
 builder.Services.AddHttpClient();
 
 builder.Services.AddSingleton<WorkflowHandlerRegistry>();
@@ -71,6 +73,9 @@ try
         ConnectionId = connectionId,
         Parameters = new Dictionary<string, JsonElement>()
     };
+
+    var engineSource = new ActivitySource("FlowForge.WorkflowEngine");
+    using var activity = engineSource.StartActivity($"execute job {jobId}");
 
     var handler = registry.Get(job.TaskId);
     var result = await handler.ExecuteAsync(context, cts.Token);

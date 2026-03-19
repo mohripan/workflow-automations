@@ -1,6 +1,7 @@
 using FlowForge.Infrastructure;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.Redis;
+using FlowForge.Infrastructure.Telemetry;
 using FlowForge.JobAutomator.Cache;
 using FlowForge.JobAutomator.Clients;
 using FlowForge.JobAutomator.Evaluators;
@@ -14,6 +15,7 @@ var builder = Host.CreateApplicationBuilder(args);
 
 // Shared Infrastructure (Redis, etc.)
 builder.Services.AddRedis(builder.Configuration);
+builder.Services.AddFlowForgeTelemetry(builder.Configuration, "JobAutomator");
 
 // HTTP client for one-time startup snapshot
 builder.Services.AddHttpClient<IAutomationApiClient, AutomationApiClient>(client =>

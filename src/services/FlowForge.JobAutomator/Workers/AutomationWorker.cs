@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FlowForge.Contracts.Events;
 using FlowForge.Infrastructure.Caching;
 using FlowForge.Infrastructure.Messaging.Abstractions;
@@ -16,6 +17,7 @@ public class AutomationWorker(
     IRedisService redis,
     ILogger<AutomationWorker> logger) : BackgroundService
 {
+    private static readonly ActivitySource _activitySource = new("FlowForge.JobAutomator");
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         logger.LogInformation("AutomationWorker starting...");
@@ -56,6 +58,8 @@ public class AutomationWorker(
 
     private async Task EvaluateAutomationAsync(AutomationSnapshot automation, CancellationToken ct)
     {
+        using var activity = _activitySource.StartActivity($"evaluate automation {automation.Id}");
+
         if (automation.ConditionRoot is null)
         {
             logger.LogError(

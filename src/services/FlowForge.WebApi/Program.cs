@@ -1,6 +1,7 @@
 using FlowForge.Infrastructure;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.Redis;
+using OpenTelemetry.Trace;
 using FlowForge.WebApi.Hubs;
 using FlowForge.WebApi.Middleware;
 using FlowForge.WebApi.Services;
@@ -13,7 +14,8 @@ using FluentValidation.AspNetCore;
 var builder = WebApplication.CreateBuilder(args);
 
 // Add Infrastructure
-builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddInfrastructure(builder.Configuration, "WebApi");
+builder.Services.AddOpenTelemetry().WithTracing(t => t.AddAspNetCoreInstrumentation());
 
 // Add Services
 builder.Services.AddScoped<IAutomationService, AutomationService>();

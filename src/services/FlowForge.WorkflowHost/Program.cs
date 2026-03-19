@@ -6,7 +6,7 @@ using FlowForge.WorkflowHost.Workers;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddInfrastructure(builder.Configuration, "WorkflowHost");
 
 builder.Services.AddSingleton<IProcessManager, NativeProcessManager>();
 

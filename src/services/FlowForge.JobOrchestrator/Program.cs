@@ -6,7 +6,7 @@ using FlowForge.JobOrchestrator.Workers;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddInfrastructure(builder.Configuration, "JobOrchestrator");
 
 builder.Services.AddSingleton<ILoadBalancer, RoundRobinLoadBalancer>();
 

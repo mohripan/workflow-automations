@@ -2,6 +2,7 @@ using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.Infrastructure.Caching;
+using FlowForge.Infrastructure.Telemetry;
 using FlowForge.Infrastructure.Persistence.Platform;
 using FlowForge.Infrastructure.Persistence.Jobs;
 using FlowForge.Infrastructure.Repositories;
@@ -19,11 +20,13 @@ namespace FlowForge.Infrastructure;
 
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration config)
+    public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration config, string? serviceName = null)
     {
         services.AddRedis(config);
         services.AddPersistence(config);
         services.AddTriggerTypeRegistry();
+        if (serviceName is not null)
+            services.AddFlowForgeTelemetry(config, serviceName);
         return services;
     }
 
