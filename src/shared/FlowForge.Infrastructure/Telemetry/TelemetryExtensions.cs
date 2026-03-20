@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 
@@ -29,6 +30,8 @@ public static class TelemetryExtensions
         IConfiguration config,
         string serviceName)
     {
+        var otlpEndpoint = config["OpenTelemetry:OtlpEndpoint"];
+
         services.AddOpenTelemetry()
             .ConfigureResource(r => r.AddService(serviceName))
             .WithTracing(tracing =>
@@ -37,9 +40,17 @@ public static class TelemetryExtensions
                     .AddSource(FlowForgeActivitySources.MessagingName)
                     .AddSource($"FlowForge.{serviceName}");
 
-                var endpoint = config["OpenTelemetry:OtlpEndpoint"];
-                if (!string.IsNullOrEmpty(endpoint))
-                    tracing.AddOtlpExporter(o => o.Endpoint = new Uri(endpoint));
+                if (!string.IsNullOrEmpty(otlpEndpoint))
+                    tracing.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
+            })
+            .WithMetrics(metrics =>
+            {
+                metrics
+                    .AddMeter(FlowForgeMetrics.MeterName)
+                    .AddRuntimeInstrumentation();
+
+                if (!string.IsNullOrEmpty(otlpEndpoint))
+                    metrics.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
             });
 
         return services;

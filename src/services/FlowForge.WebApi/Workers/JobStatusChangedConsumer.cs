@@ -3,6 +3,7 @@ using FlowForge.Domain.Enums;
 using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.Redis;
+using FlowForge.Infrastructure.Telemetry;
 using FlowForge.WebApi.DTOs.Responses;
 using FlowForge.WebApi.Hubs;
 using Microsoft.AspNetCore.SignalR;
@@ -36,6 +37,13 @@ public class JobStatusChangedConsumer(
                 if (@event.Message is not null) job.SetMessage(@event.Message);
 
                 await jobRepo.SaveAsync(job, stoppingToken);
+
+                if (@event.Status == JobStatus.Completed)
+                    FlowForgeMetrics.JobsCompleted.Add(1,
+                        new KeyValuePair<string, object?>("host_group_id", job.HostGroupId));
+                else if (@event.Status is JobStatus.Error or JobStatus.CompletedUnsuccessfully)
+                    FlowForgeMetrics.JobsFailed.Add(1,
+                        new KeyValuePair<string, object?>("host_group_id", job.HostGroupId));
 
                 // Clear ActiveJobId on the automation when job reaches a terminal status
                 if (@event.Status.IsTerminal())

@@ -78,7 +78,13 @@ try
     using var activity = engineSource.StartActivity($"execute job {jobId}");
 
     var handler = registry.Get(job.TaskId);
+    var sw = Stopwatch.StartNew();
     var result = await handler.ExecuteAsync(context, cts.Token);
+    sw.Stop();
+
+    FlowForge.Infrastructure.Telemetry.FlowForgeMetrics.JobDurationSeconds.Record(
+        sw.Elapsed.TotalSeconds,
+        new KeyValuePair<string, object?>("task_id", job.TaskId));
 
     var finalStatus = result.Status switch
     {

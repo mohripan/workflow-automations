@@ -2,6 +2,7 @@ using System.Diagnostics;
 using FlowForge.Contracts.Events;
 using FlowForge.Infrastructure.Caching;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Telemetry;
 using FlowForge.JobAutomator.Cache;
 using FlowForge.JobAutomator.Evaluators;
 using Microsoft.Extensions.Hosting;
@@ -106,6 +107,9 @@ public class AutomationWorker(
             ConnectionId: automation.ConnectionId,
             TaskId: automation.TaskId,
             TriggeredAt: DateTimeOffset.UtcNow), ct: ct);
+
+        FlowForgeMetrics.TriggersFired.Add(1,
+            new KeyValuePair<string, object?>("automation_id", automation.Id));
 
         logger.LogInformation(
             "Automation {AutomationId} ({Name}) triggered — event published",

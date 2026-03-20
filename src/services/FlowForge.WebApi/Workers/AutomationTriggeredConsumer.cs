@@ -6,6 +6,7 @@ using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.Infrastructure.Messaging.Redis;
+using FlowForge.Infrastructure.Telemetry;
 
 namespace FlowForge.WebApi.Workers;
 
@@ -67,6 +68,10 @@ public class AutomationTriggeredConsumer(
                 ), stoppingToken);
                 await automationRepo.SaveAsync(automation, stoppingToken);  // commits automation + outbox message
                 await jobRepo.SaveAsync(job, stoppingToken);
+
+                FlowForgeMetrics.JobsCreated.Add(1,
+                    new KeyValuePair<string, object?>("automation_id", automation.Id),
+                    new KeyValuePair<string, object?>("host_group_id", automation.HostGroupId));
 
                 logger.LogInformation("Job {JobId} created for automation {AutomationId}", job.Id, automation.Id);
             }
