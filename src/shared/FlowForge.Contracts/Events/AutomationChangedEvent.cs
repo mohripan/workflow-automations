@@ -20,7 +20,8 @@ public record AutomationSnapshot(
     IReadOnlyList<TriggerSnapshot> Triggers,
     TriggerConditionNode ConditionRoot,
     int? TimeoutSeconds = null,
-    int MaxRetries = 0
+    int MaxRetries = 0,
+    string? TaskConfig = null
 );
 
 public record TriggerSnapshot(

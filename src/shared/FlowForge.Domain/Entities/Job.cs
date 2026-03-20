@@ -16,10 +16,11 @@ public class Job : BaseEntity<Guid>
     public int? TimeoutSeconds { get; private set; }
     public int RetryAttempt { get; private set; }
     public int MaxRetries { get; private set; }
+    public string? TaskConfig { get; private set; }
 
     private Job() { }
 
-    public static Job Create(Guid automationId, string taskId, string connectionId, Guid hostGroupId, DateTimeOffset triggeredAt, int? timeoutSeconds = null, int retryAttempt = 0, int maxRetries = 0)
+    public static Job Create(Guid automationId, string taskId, string connectionId, Guid hostGroupId, DateTimeOffset triggeredAt, int? timeoutSeconds = null, int retryAttempt = 0, int maxRetries = 0, string? taskConfig = null)
     {
         return new Job
         {
@@ -32,7 +33,8 @@ public class Job : BaseEntity<Guid>
             TriggeredAt = triggeredAt,
             TimeoutSeconds = timeoutSeconds,
             RetryAttempt = retryAttempt,
-            MaxRetries = maxRetries
+            MaxRetries = maxRetries,
+            TaskConfig = taskConfig
         };
     }
 

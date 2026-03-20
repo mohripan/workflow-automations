@@ -8,5 +8,6 @@ public record AutomationTriggeredEvent(
     DateTimeOffset TriggeredAt,
     int? TimeoutSeconds = null,
     int MaxRetries = 0,
-    int RetryAttempt = 0
+    int RetryAttempt = 0,
+    string? TaskConfig = null
 );

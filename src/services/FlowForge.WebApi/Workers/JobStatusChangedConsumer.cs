@@ -71,7 +71,8 @@ public class JobStatusChangedConsumer(
                                 TriggeredAt:  DateTimeOffset.UtcNow,
                                 TimeoutSeconds: job.TimeoutSeconds,
                                 MaxRetries:   job.MaxRetries,
-                                RetryAttempt: job.RetryAttempt + 1), stoppingToken);
+                                RetryAttempt: job.RetryAttempt + 1,
+                                TaskConfig:   job.TaskConfig), stoppingToken);
 
                             logger.LogInformation(
                                 "Job {JobId} failed (attempt {Attempt}/{Max}); scheduling retry.",

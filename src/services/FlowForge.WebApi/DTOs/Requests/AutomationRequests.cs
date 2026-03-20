@@ -10,7 +10,8 @@ public record CreateAutomationRequest(
     List<CreateTriggerRequest> Triggers,
     TriggerConditionRequest TriggerCondition,
     int? TimeoutSeconds = null,
-    int MaxRetries = 0
+    int MaxRetries = 0,
+    string? TaskConfig = null
 );
 
 public record CreateTriggerRequest(
@@ -33,5 +34,6 @@ public record UpdateAutomationRequest(
     List<CreateTriggerRequest> Triggers,
     TriggerConditionRequest TriggerCondition,
     int? TimeoutSeconds = null,
-    int MaxRetries = 0
+    int MaxRetries = 0,
+    string? TaskConfig = null
 );

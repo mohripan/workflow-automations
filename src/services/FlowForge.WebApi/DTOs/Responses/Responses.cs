@@ -11,6 +11,7 @@ public record AutomationResponse(
     bool IsEnabled,
     int? TimeoutSeconds,
     int MaxRetries,
+    string? TaskConfig,
     List<TriggerResponse> Triggers,
     TriggerConditionResponse TriggerCondition,
     DateTimeOffset CreatedAt,

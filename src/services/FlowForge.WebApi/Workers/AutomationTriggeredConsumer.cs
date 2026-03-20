@@ -62,7 +62,8 @@ public class AutomationTriggeredConsumer(
                     triggeredAt: @event.TriggeredAt,
                     timeoutSeconds: @event.TimeoutSeconds,
                     retryAttempt: @event.RetryAttempt,
-                    maxRetries: @event.MaxRetries);
+                    maxRetries: @event.MaxRetries,
+                    taskConfig: @event.TaskConfig);
 
                 automation.SetActiveJob(job.Id);
                 await outboxWriter.WriteAsync(new JobCreatedEvent(

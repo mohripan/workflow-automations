@@ -16,6 +16,7 @@ public class AutomationConfiguration : IEntityTypeConfiguration<Automation>
         builder.Property(x => x.ActiveJobId);
         builder.Property(x => x.TimeoutSeconds);
         builder.Property(x => x.MaxRetries).HasDefaultValue(0);
+        builder.Property(x => x.TaskConfig).HasColumnType("jsonb");
 
         builder.HasMany(x => x.Triggers)
             .WithOne()

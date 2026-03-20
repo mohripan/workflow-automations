@@ -112,7 +112,8 @@ public class AutomationWorker(
             TaskId: automation.TaskId,
             TriggeredAt: DateTimeOffset.UtcNow,
             TimeoutSeconds: automation.TimeoutSeconds,
-            MaxRetries: automation.MaxRetries), ct: ct);
+            MaxRetries: automation.MaxRetries,
+            TaskConfig: automation.TaskConfig), ct: ct);
 
         FlowForgeMetrics.TriggersFired.Add(1,
             new KeyValuePair<string, object?>("automation_id", automation.Id));

@@ -75,12 +75,16 @@ try
 
     await reporter.ReportStatusAsync(jobId, automationId, connectionId, JobStatus.InProgress, ct: cts.Token);
 
+    var parameters = job.TaskConfig is not null
+        ? JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(job.TaskConfig) ?? []
+        : new Dictionary<string, JsonElement>();
+
     var context = new WorkflowContext
     {
         JobId = job.Id,
         TaskId = job.TaskId,
         ConnectionId = connectionId,
-        Parameters = new Dictionary<string, JsonElement>()
+        Parameters = parameters
     };
 
     var engineSource = new ActivitySource("FlowForge.WorkflowEngine");

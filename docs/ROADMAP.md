@@ -18,7 +18,7 @@ This document tracks the next phase of FlowForge development. The focus is on ma
 
 | # | Title | Area | Status |
 |---|---|---|---|
-| 1 | [Task Parameters Propagation](#1-task-parameters-propagation) | Core / Bug Fix | `[ ]` |
+| 1 | [Task Parameters Propagation](#1-task-parameters-propagation) | Core / Bug Fix | `[x]` |
 | 2 | [Dockerize Application Services](#2-dockerize-application-services) | Infrastructure | `[ ]` |
 | 3 | [End-to-End Send-Email via Mailtrap](#3-end-to-end-send-email-via-mailtrap) | E2E Demo | `[ ]` |
 | 4 | [Job Dispatcher Resilience — No-Host Queuing](#4-job-dispatcher-resilience--no-host-queuing) | Reliability | `[ ]` |
