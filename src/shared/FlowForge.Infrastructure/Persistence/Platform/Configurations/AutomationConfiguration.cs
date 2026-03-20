@@ -14,6 +14,7 @@ public class AutomationConfiguration : IEntityTypeConfiguration<Automation>
         builder.Property(x => x.Name).IsRequired().HasMaxLength(200);
         builder.Property(x => x.IsEnabled).IsRequired();
         builder.Property(x => x.ActiveJobId);
+        builder.Property(x => x.TimeoutSeconds);
 
         builder.HasMany(x => x.Triggers)
             .WithOne()

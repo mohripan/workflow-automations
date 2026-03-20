@@ -56,7 +56,8 @@ public class AutomationTriggeredConsumer(
                     taskId: automation.TaskId,
                     connectionId: hostGroup.ConnectionId,
                     hostGroupId: automation.HostGroupId,
-                    triggeredAt: @event.TriggeredAt);
+                    triggeredAt: @event.TriggeredAt,
+                    timeoutSeconds: @event.TimeoutSeconds);
 
                 automation.SetActiveJob(job.Id);
                 await outboxWriter.WriteAsync(new JobCreatedEvent(
@@ -64,7 +65,8 @@ public class AutomationTriggeredConsumer(
                     ConnectionId: hostGroup.ConnectionId,
                     AutomationId: job.AutomationId,
                     HostGroupId: job.HostGroupId,
-                    CreatedAt: job.CreatedAt
+                    CreatedAt: job.CreatedAt,
+                    TimeoutSeconds: job.TimeoutSeconds
                 ), stoppingToken);
                 await automationRepo.SaveAsync(automation, stoppingToken);  // commits automation + outbox message
                 await jobRepo.SaveAsync(job, stoppingToken);

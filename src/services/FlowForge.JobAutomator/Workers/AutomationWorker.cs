@@ -106,7 +106,8 @@ public class AutomationWorker(
             HostGroupId: automation.HostGroupId,
             ConnectionId: automation.ConnectionId,
             TaskId: automation.TaskId,
-            TriggeredAt: DateTimeOffset.UtcNow), ct: ct);
+            TriggeredAt: DateTimeOffset.UtcNow,
+            TimeoutSeconds: automation.TimeoutSeconds), ct: ct);
 
         FlowForgeMetrics.TriggersFired.Add(1,
             new KeyValuePair<string, object?>("automation_id", automation.Id));

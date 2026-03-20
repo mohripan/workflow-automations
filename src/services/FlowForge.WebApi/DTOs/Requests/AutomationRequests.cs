@@ -8,7 +8,8 @@ public record CreateAutomationRequest(
     Guid HostGroupId,
     string TaskId,
     List<CreateTriggerRequest> Triggers,
-    TriggerConditionRequest TriggerCondition
+    TriggerConditionRequest TriggerCondition,
+    int? TimeoutSeconds = null
 );
 
 public record CreateTriggerRequest(
@@ -29,5 +30,6 @@ public record UpdateAutomationRequest(
     Guid HostGroupId,
     string TaskId,
     List<CreateTriggerRequest> Triggers,
-    TriggerConditionRequest TriggerCondition
+    TriggerConditionRequest TriggerCondition,
+    int? TimeoutSeconds = null
 );

@@ -44,6 +44,8 @@ var jobRepo = services.GetRequiredKeyedService<IJobRepository>(connectionId);
 
 var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+CancellationTokenSource? timeoutCts = null;
+int? timeoutSeconds = null;
 
 try
 {
@@ -52,6 +54,13 @@ try
     {
         Console.WriteLine($"Job {jobId} not found");
         return 1;
+    }
+
+    if (job.TimeoutSeconds.HasValue)
+    {
+        timeoutSeconds = job.TimeoutSeconds;
+        timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds.Value));
+        cts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, timeoutCts.Token);
     }
 
     // Start heartbeat loop
@@ -99,6 +108,12 @@ try
 }
 catch (OperationCanceledException)
 {
+    if (timeoutCts?.IsCancellationRequested == true)
+    {
+        await reporter.ReportStatusAsync(jobId, automationId, connectionId, JobStatus.Error,
+            $"Job timed out after {timeoutSeconds} seconds.", CancellationToken.None);
+        return 1;
+    }
     await reporter.ReportStatusAsync(jobId, automationId, connectionId, JobStatus.Cancelled, "Cancelled", CancellationToken.None);
     return 0;
 }

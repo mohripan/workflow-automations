@@ -5,5 +5,6 @@ public record JobCreatedEvent(
     string ConnectionId,
     Guid AutomationId,
     Guid HostGroupId,
-    DateTimeOffset CreatedAt
+    DateTimeOffset CreatedAt,
+    int? TimeoutSeconds = null
 );

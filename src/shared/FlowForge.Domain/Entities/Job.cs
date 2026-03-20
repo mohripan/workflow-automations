@@ -13,10 +13,11 @@ public class Job : BaseEntity<Guid>
     public JobStatus Status { get; private set; }
     public string? Message { get; private set; }
     public DateTimeOffset? TriggeredAt { get; private set; }
+    public int? TimeoutSeconds { get; private set; }
 
     private Job() { }
 
-    public static Job Create(Guid automationId, string taskId, string connectionId, Guid hostGroupId, DateTimeOffset triggeredAt)
+    public static Job Create(Guid automationId, string taskId, string connectionId, Guid hostGroupId, DateTimeOffset triggeredAt, int? timeoutSeconds = null)
     {
         return new Job
         {
@@ -26,7 +27,8 @@ public class Job : BaseEntity<Guid>
             ConnectionId = connectionId,
             HostGroupId = hostGroupId,
             Status = JobStatus.Pending,
-            TriggeredAt = triggeredAt
+            TriggeredAt = triggeredAt,
+            TimeoutSeconds = timeoutSeconds
         };
     }
 

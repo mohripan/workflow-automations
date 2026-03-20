@@ -60,7 +60,8 @@ public class AutomationService(
             taskId: request.TaskId,
             hostGroupId: request.HostGroupId,
             triggers: triggers,
-            conditionRoot: conditionRoot);
+            conditionRoot: conditionRoot,
+            timeoutSeconds: request.TimeoutSeconds);
 
         var snapshot = await MapToSnapshotAsync(automation, ct);
         await outboxWriter.WriteAsync(new AutomationChangedEvent(automation.Id, ChangeType.Created, snapshot), ct);
@@ -82,7 +83,7 @@ public class AutomationService(
 
         var conditionRoot = MapConditionNode(request.TriggerCondition);
 
-        automation.Update(request.Name, request.Description, request.TaskId, request.HostGroupId, triggers, conditionRoot);
+        automation.Update(request.Name, request.Description, request.TaskId, request.HostGroupId, triggers, conditionRoot, request.TimeoutSeconds);
 
         var snapshot = await MapToSnapshotAsync(automation, ct);
         await outboxWriter.WriteAsync(new AutomationChangedEvent(automation.Id, ChangeType.Updated, snapshot), ct);
@@ -185,7 +186,8 @@ public class AutomationService(
             ConnectionId: hostGroup.ConnectionId,
             TaskId: a.TaskId,
             Triggers: a.Triggers.Select(t => new TriggerSnapshot(t.Id, t.Name, t.TypeId, t.ConfigJson)).ToList(),
-            ConditionRoot: MapConditionNodeToSnapshot(a.ConditionRoot)
+            ConditionRoot: MapConditionNodeToSnapshot(a.ConditionRoot),
+            TimeoutSeconds: a.TimeoutSeconds
         );
     }
 
@@ -198,6 +200,7 @@ public class AutomationService(
         HostGroupId: a.HostGroupId,
         TaskId: a.TaskId,
         IsEnabled: a.IsEnabled,
+        TimeoutSeconds: a.TimeoutSeconds,
         Triggers: a.Triggers.Select(t => new TriggerResponse(t.Id, t.Name, t.TypeId, t.ConfigJson)).ToList(),
         TriggerCondition: MapConditionResponse(a.ConditionRoot),
         CreatedAt: a.CreatedAt,

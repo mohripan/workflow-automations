@@ -18,7 +18,8 @@ public record AutomationSnapshot(
     string ConnectionId,
     string TaskId,
     IReadOnlyList<TriggerSnapshot> Triggers,
-    TriggerConditionNode ConditionRoot
+    TriggerConditionNode ConditionRoot,
+    int? TimeoutSeconds = null
 );
 
 public record TriggerSnapshot(

@@ -11,6 +11,7 @@ public class Automation : BaseEntity<Guid>
     public Guid HostGroupId { get; private set; }
     public bool IsEnabled { get; private set; }
     public Guid? ActiveJobId { get; private set; }
+    public int? TimeoutSeconds { get; private set; }
     public TriggerConditionNode ConditionRoot { get; private set; } = default!;
 
     private List<Trigger> _triggers = [];
@@ -24,7 +25,8 @@ public class Automation : BaseEntity<Guid>
         string taskId,
         Guid hostGroupId,
         List<Trigger> triggers,
-        TriggerConditionNode conditionRoot)
+        TriggerConditionNode conditionRoot,
+        int? timeoutSeconds = null)
     {
         if (triggers == null || triggers.Count == 0)
             throw new InvalidAutomationException("At least one trigger is required.");
@@ -41,6 +43,7 @@ public class Automation : BaseEntity<Guid>
             TaskId = taskId,
             HostGroupId = hostGroupId,
             IsEnabled = true,
+            TimeoutSeconds = timeoutSeconds,
             _triggers = triggers,
             ConditionRoot = conditionRoot
         };
@@ -52,7 +55,8 @@ public class Automation : BaseEntity<Guid>
         string taskId,
         Guid hostGroupId,
         List<Trigger> triggers,
-        TriggerConditionNode conditionRoot)
+        TriggerConditionNode conditionRoot,
+        int? timeoutSeconds = null)
     {
         if (triggers == null || triggers.Count == 0)
             throw new InvalidAutomationException("At least one trigger is required.");
@@ -65,6 +69,7 @@ public class Automation : BaseEntity<Guid>
         Description = description;
         TaskId = taskId;
         HostGroupId = hostGroupId;
+        TimeoutSeconds = timeoutSeconds;
         _triggers = triggers;
         ConditionRoot = conditionRoot;
         UpdateTimestamp();

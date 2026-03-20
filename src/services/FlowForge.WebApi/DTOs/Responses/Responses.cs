@@ -9,6 +9,7 @@ public record AutomationResponse(
     Guid HostGroupId,
     string TaskId,
     bool IsEnabled,
+    int? TimeoutSeconds,
     List<TriggerResponse> Triggers,
     TriggerConditionResponse TriggerCondition,
     DateTimeOffset CreatedAt,

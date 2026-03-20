@@ -5,5 +5,6 @@ public record AutomationTriggeredEvent(
     Guid HostGroupId,
     string ConnectionId,
     string TaskId,
-    DateTimeOffset TriggeredAt
+    DateTimeOffset TriggeredAt,
+    int? TimeoutSeconds = null
 );
