@@ -7,12 +7,13 @@ using FlowForge.JobAutomator.Clients;
 using FlowForge.JobAutomator.Evaluators;
 using FlowForge.JobAutomator.Initialization;
 using FlowForge.JobAutomator.Workers;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Quartz;
 using Quartz.Impl.AdoJobStore;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.UseUrls("http://+:8080");
 
 // Shared Infrastructure (Redis, etc.)
 builder.Services.AddRedis(builder.Configuration);
@@ -69,11 +70,24 @@ builder.Services.AddHostedService<AutomationCacheSyncWorker>();
 builder.Services.AddHostedService<JobCompletedFlagWorker>();
 builder.Services.AddHostedService<AutomationWorker>();
 
-var host = builder.Build();
+// Health Checks
+var redisConnStr = builder.Configuration["Redis:ConnectionString"]
+    ?? throw new InvalidOperationException("Missing Redis:ConnectionString");
+
+builder.Services.AddHealthChecks()
+    .AddRedis(redisConnStr, name: "redis");
+
+var app = builder.Build();
 
 // Bootstrap Redis consumer groups
-var bootstrapper = host.Services.GetRequiredService<IStreamBootstrapper>();
+var bootstrapper = app.Services.GetRequiredService<IStreamBootstrapper>();
 await bootstrapper.EnsureAsync(StreamNames.AutomationChanged, "job-automator");
 await bootstrapper.EnsureAsync(StreamNames.JobStatusChanged, "job-automator-flags");
 
-host.Run();
+// Health endpoints
+// Liveness: always 200 — only checks the process is not hung
+app.MapHealthChecks("/health/live",  new HealthCheckOptions { Predicate = _ => false });
+// Readiness: runs redis check
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = _ => true });
+
+await app.RunAsync();

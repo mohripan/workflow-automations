@@ -7,6 +7,7 @@ using FlowForge.WebApi.Middleware;
 using FlowForge.WebApi.Services;
 using FlowForge.WebApi.Workers;
 using FlowForge.WebApi.Validators;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.OpenApi;
 using FluentValidation;
 using FluentValidation.AspNetCore;
@@ -16,6 +17,16 @@ var builder = WebApplication.CreateBuilder(args);
 // Add Infrastructure
 builder.Services.AddInfrastructure(builder.Configuration, "WebApi");
 builder.Services.AddOpenTelemetry().WithTracing(t => t.AddAspNetCoreInstrumentation());
+
+// Add Health Checks
+var pgConnStr = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("Missing ConnectionStrings:DefaultConnection");
+var redisConnStr = builder.Configuration["Redis:ConnectionString"]
+    ?? throw new InvalidOperationException("Missing Redis:ConnectionString");
+
+builder.Services.AddHealthChecks()
+    .AddNpgSql(pgConnStr, healthQuery: "SELECT 1;", name: "postgres")
+    .AddRedis(redisConnStr, name: "redis");
 
 // Add Services
 builder.Services.AddScoped<IAutomationService, AutomationService>();
@@ -75,5 +86,11 @@ app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseCors();
 app.MapControllers();
 app.MapHub<JobStatusHub>("/hubs/job-status");
+
+// Health endpoints
+// Liveness: always 200 — only checks the process is not hung
+app.MapHealthChecks("/health/live",  new HealthCheckOptions { Predicate = _ => false });
+// Readiness: runs postgres + redis checks
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = _ => true });
 
 app.Run();

@@ -19,7 +19,7 @@ This document tracks planned improvements to FlowForge. Each item includes the m
 | # | Title | Area | Status |
 |---|---|---|---|
 | 1 | [Unit & Integration Test Suite](#1-unit--integration-test-suite) | Quality | `[x]` |
-| 2 | [Health Checks & Kubernetes Probes](#2-health-checks--kubernetes-probes) | Reliability | `[ ]` |
+| 2 | [Health Checks & Kubernetes Probes](#2-health-checks--kubernetes-probes) | Reliability | `[x]` |
 | 3 | [OpenTelemetry Metrics](#3-opentelemetry-metrics) | Observability | `[ ]` |
 | 4 | [Job Timeout Enforcement](#4-job-timeout-enforcement) | Reliability | `[ ]` |
 | 5 | [Dead Letter Queue for Poison Messages](#5-dead-letter-queue-for-poison-messages) | Reliability | `[ ]` |
