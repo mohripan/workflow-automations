@@ -2,97 +2,88 @@
 
 ## Responsibility
 
-The Job Orchestrator is a **Worker Service** that:
+The Job Orchestrator is a worker service that:
+1. Consumes `JobCreatedEvent` from Redis and dispatches each job to an available host
+2. Monitors host heartbeats and marks unresponsive hosts offline
 
-1. Consumes `JobCreatedEvent` from Redis Streams
-2. Selects the best available host within the job's `HostGroup` using round-robin load balancing
-3. Publishes a `JobAssignedEvent` to the target host's dedicated stream
-4. Monitors job heartbeats and marks dead jobs as `Error`
-
----
-
-## How It Works (Overview)
-
-```
-┌───────────────────────────────────────────────────────────────┐
-│                        JobOrchestrator                         │
-│                                                               │
-│   JobDispatcherWorker          HeartbeatMonitorWorker         │
-│   ─────────────────────        ──────────────────────         │
-│   Consume JobCreatedEvent      Scan Redis for expired         │
-│       ↓                        heartbeat keys                 │
-│   Find available hosts         Mark affected jobs → Error     │
-│   in HostGroup                                                │
-│       ↓                                                       │
-│   Round-robin select host                                     │
-│       ↓                                                       │
-│   Update Job: Started + HostId                               │
-│       ↓                                                       │
-│   Publish JobAssignedEvent                                    │
-│   to host-specific stream                                     │
-└───────────────────────────────────────────────────────────────┘
-```
+It has **read/write access to the job databases** (to update `Job.Status` and `Job.HostId`) and to the platform database (to read `WorkflowHost` records).
 
 ---
 
-## Job Dispatcher Worker
+## Architecture Overview
 
-Consumes `flowforge:job-created` stream and dispatches each job to an appropriate host.
+```
+flowforge:job-created  ──►  JobDispatcherWorker
+                                  │
+                          IWorkflowHostRepository (platform DB)
+                          IJobRepository keyed by ConnectionId (job DB)
+                          ILoadBalancer (round-robin)
+                                  │
+                          publisher ──► flowforge:host:{selectedHostId}
+                                  │
+                      (on error) DlqWriter ──► flowforge:dlq
+
+
+Platform DB (WorkflowHosts table)
+         │
+         ▼
+HeartbeatMonitorWorker (every N seconds)
+         │
+    IRedisService → host:heartbeat:{hostId}   (set by WorkflowHost)
+```
+
+---
+
+## JobDispatcherWorker
+
+Consumes `JobCreatedEvent` from `flowforge:job-created` (consumer group `"job-orchestrator"`, consumer name `"orchestrator-1"`).
+
+For each event:
+1. Load the `Job` from the job DB keyed by `event.ConnectionId`
+2. Load online hosts for `job.HostGroupId`
+3. If **no online hosts** → log warning and `continue` (job stays `Pending` — see Known Limitation below)
+4. Select a host via `ILoadBalancer.Select(...)`
+5. Transition job to `Started`, assign `HostId`, call `jobRepo.SaveAsync`
+6. Publish `JobAssignedEvent` to `flowforge:host:{selectedHostId}`
+
+On exception → `IDlqWriter.WriteAsync` + continue (never crashes the consumer).
+
+Uses OpenTelemetry span: `"dispatch job {jobId}"`.
 
 ```csharp
-protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+// JobDispatcherWorker simplified
+await foreach (var @event in consumer.ConsumeAsync<JobCreatedEvent>(
+    StreamNames.JobCreated, "job-orchestrator", "orchestrator-1", stoppingToken))
 {
-    await foreach (var @event in _consumer.ConsumeAsync<JobCreatedEvent>(
-        StreamNames.JobCreated,
-        consumerGroup: "job-orchestrator",
-        consumerName: _options.InstanceName,
-        ct: stoppingToken))
+    try
     {
-        await DispatchJobAsync(@event, stoppingToken);
+        var jobRepo = serviceProvider.GetRequiredKeyedService<IJobRepository>(@event.ConnectionId);
+        var job = await jobRepo.GetByIdAsync(@event.JobId, stoppingToken);
+
+        var hosts   = await hostRepo.GetByGroupAsync(job.HostGroupId, stoppingToken);
+        var online  = hosts.Where(h => h.IsOnline).ToList();
+        if (online.Count == 0) { /* warn + continue */ continue; }
+
+        var host = loadBalancer.Select(online, job.HostGroupId);
+
+        job.Transition(JobStatus.Started);
+        job.AssignToHost(host.Id);
+        await jobRepo.SaveAsync(job, stoppingToken);
+
+        await publisher.PublishAsync(
+            new JobAssignedEvent(job.Id, @event.ConnectionId, host.Id, job.AutomationId, DateTimeOffset.UtcNow),
+            StreamNames.HostStream(host.Id.ToString()), stoppingToken);
     }
-}
-
-private async Task DispatchJobAsync(JobCreatedEvent @event, CancellationToken ct)
-{
-    var job = await _jobRepo.GetByIdAsync(@event.JobId, ct)
-        ?? throw new JobNotFoundException(@event.JobId);
-
-    // Get online hosts in the target group
-    var hosts = await _hostRepo.GetOnlineByGroupAsync(@event.HostGroupId, ct);
-    if (hosts.Count == 0)
-    {
-        _logger.LogWarning(
-            "No available hosts in group {HostGroupId} for job {JobId}",
-            @event.HostGroupId, @event.JobId);
-        // Leave job as Pending — will be retried on next available host registration
-        return;
-    }
-
-    // Select host via round-robin
-    var selectedHost = _loadBalancer.Select(hosts, @event.HostGroupId);
-
-    // Transition job status and assign host
-    job.Transition(JobStatus.Started);
-    job.AssignHost(selectedHost.Id);
-    await _jobRepo.SaveAsync(job, ct);
-
-    // Publish to host-specific stream
-    await _publisher.PublishAsync(new JobAssignedEvent(
-        JobId:    job.Id,
-        HostId:   selectedHost.Id,
-        AssignedAt: DateTimeOffset.UtcNow
-    ), targetStream: StreamNames.HostStream(selectedHost.Id), ct);
-
-    _logger.LogInformation(
-        "Job {JobId} assigned to host {HostId}", job.Id, selectedHost.Id);
+    catch (Exception ex) { /* DLQ + continue */ }
 }
 ```
 
+### Known Limitation: No-Host Drop
+When no hosts are online the job is silently acknowledged and left in `Pending` status. There is no re-queue mechanism. If hosts come back online the job will never be dispatched. This is tracked as ROADMAP item #4.
+
 ---
 
-## Load Balancer
-
-### Interface
+## ILoadBalancer
 
 ```csharp
 public interface ILoadBalancer
@@ -101,126 +92,40 @@ public interface ILoadBalancer
 }
 ```
 
-### Round-Robin Implementation
-
-Tracks the last-selected index per `HostGroup` in memory. Thread-safe via `ConcurrentDictionary`.
-
-```csharp
-public class RoundRobinLoadBalancer : ILoadBalancer
-{
-    private readonly ConcurrentDictionary<Guid, int> _counters = new();
-
-    public WorkflowHost Select(IReadOnlyList<WorkflowHost> hosts, Guid hostGroupId)
-    {
-        if (hosts.Count == 0)
-            throw new NoAvailableHostException(hostGroupId);
-
-        var index = _counters.AddOrUpdate(
-            key:            hostGroupId,
-            addValue:       0,
-            updateValueFactory: (_, prev) => (prev + 1) % hosts.Count);
-
-        return hosts[index];
-    }
-}
-```
-
-> **Note:** Since `JobOrchestrator` runs as a single replica (see SPECS.md), in-memory counters are sufficient. For multi-replica HA setups, migrate the counter to a Redis `INCR` key.
+### RoundRobinLoadBalancer
+Maintains a `ConcurrentDictionary<Guid, int>` counter per host group. Each call returns `hosts[counter % hosts.Count]` and atomically increments the counter.
 
 ---
 
-## Heartbeat Monitor Worker
+## HeartbeatMonitorWorker
 
-Runs on a fixed interval and scans for jobs whose heartbeat key has expired in Redis.
+Runs every `HeartbeatMonitorOptions.CheckIntervalSeconds` seconds (default: 15).
 
-```csharp
-protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-{
-    while (!stoppingToken.IsCancellationRequested)
-    {
-        await Task.Delay(_options.HeartbeatScanIntervalMs, stoppingToken);
-        await ScanExpiredHeartbeatsAsync(stoppingToken);
-    }
+For every `WorkflowHost` in the platform DB:
+- Checks Redis key `host:heartbeat:{hostId}` (set by `HostHeartbeatWorker` in WorkflowHost with a 30-second TTL)
+- Key **absent** + host is `IsOnline=true` → `host.MarkOffline()` + save
+- Key **present** + host is `IsOnline=false` → `host.MarkOnline()` + save
+
+```json
+// appsettings.json
+"HeartbeatMonitor": {
+  "CheckIntervalSeconds": 15
 }
-
-private async Task ScanExpiredHeartbeatsAsync(CancellationToken ct)
-{
-    // Get all jobs currently in InProgress status
-    var activeJobs = await _jobRepo.GetByStatusAsync(JobStatus.InProgress, ct);
-
-    foreach (var job in activeJobs)
-    {
-        var isAlive = await _redis.IsHeartbeatAliveAsync(job.Id);
-        if (isAlive) continue;
-
-        _logger.LogWarning(
-            "Heartbeat expired for job {JobId}, marking as Error", job.Id);
-
-        job.Transition(JobStatus.Error);
-        job.SetError("Heartbeat expired — engine process may have crashed");
-        await _jobRepo.SaveAsync(job, ct);
-
-        // Notify frontend via the status-changed event
-        await _publisher.PublishAsync(new JobStatusChangedEvent(
-            JobId:     job.Id,
-            Status:    JobStatus.Error,
-            UpdatedAt: DateTimeOffset.UtcNow
-        ), ct);
-    }
-}
-```
-
-### Heartbeat Key Convention
-
-| Redis Key | TTL | Set By |
-|---|---|---|
-| `heartbeat:{jobId}` | 30 seconds | `WorkflowEngine` (every 5s) |
-
-If the key does not exist when `IsHeartbeatAliveAsync` checks, the heartbeat is considered expired.
-
----
-
-## Host Registration
-
-Workflow Hosts register themselves in the database when they start and deregister (or become stale) when they stop. The orchestrator only dispatches to hosts with status `Online`.
-
-### Host Online/Offline Detection
-- `WorkflowHost` writes a heartbeat key `host:heartbeat:{hostId}` to Redis with TTL 30s on startup and refreshes every 10s.
-- `JobOrchestrator` calls `GetOnlineByGroupAsync` which queries hosts whose `LastHeartbeat` is within the last 30s.
-- Alternatively: listen to host heartbeat events via a dedicated stream.
-
----
-
-## Handling Pending Jobs With No Available Host
-
-When `DispatchJobAsync` finds no online hosts, the job stays `Pending`. To handle this without tight-loop retry:
-
-- `JobDispatcherWorker` subscribes to a secondary stream `flowforge:host-registered` (published by WorkflowHost on startup).
-- On receiving a host registration event, it re-scans for `Pending` jobs in that host's group.
-
-```csharp
-// On host-registered event
-var pendingJobs = await _jobRepo.GetPendingByGroupAsync(@event.HostGroupId, ct);
-foreach (var job in pendingJobs)
-    await DispatchJobAsync(new JobCreatedEvent(job.Id, job.AutomationId, job.HostGroupId), ct);
 ```
 
 ---
 
 ## Cancel Flow
 
-The orchestrator is **not** directly involved in cancelling a running job — the Web API publishes `JobCancelRequestedEvent` directly to the Workflow Host. However, the orchestrator handles removing jobs that are still `Pending`:
+The cancel flow does not pass through JobOrchestrator directly. `WebApi` publishes `JobCancelRequestedEvent` to `flowforge:job-cancel-requested`. `WorkflowHost`'s `CancelConsumerWorker` handles it.
 
-```csharp
-// Called when Web API publishes a cancel request for a Pending job
-private async Task HandleCancelPendingJobAsync(Guid jobId, CancellationToken ct)
-{
-    var job = await _jobRepo.GetByIdAsync(jobId, ct)!;
-    if (job.Status != JobStatus.Pending) return;   // already dispatched, not our concern
+---
 
-    job.Transition(JobStatus.Removed);
-    await _jobRepo.SaveAsync(job, ct);
-}
+## Health Checks
+
+```
+GET /health/live   → 200 always (liveness)
+GET /health/ready  → checks PostgreSQL (platform DB) + Redis
 ```
 
 ---
@@ -229,28 +134,34 @@ private async Task HandleCancelPendingJobAsync(Guid jobId, CancellationToken ct)
 
 ```json
 {
-  "JobOrchestrator": {
-    "InstanceName": "orchestrator-1",
-    "HeartbeatScanIntervalMs": 15000
-  },
-  "Redis": {
-    "ConnectionString": "redis:6379",
-    "HeartbeatTtlSeconds": 30
+  "HeartbeatMonitor": {
+    "CheckIntervalSeconds": 15
   },
   "ConnectionStrings": {
-    "DefaultConnection": "Host=postgres;Database=flowforge;..."
-  }
+    "DefaultConnection": "Host=localhost;Database=flowforge_platform;Username=postgres;Password=postgres"
+  },
+  "JobConnections": {
+    "wf-jobs-minion": {
+      "ConnectionString": "Host=localhost;Port=5433;Database=flowforge_minion;Username=postgres;Password=postgres",
+      "Provider": "PostgreSQL"
+    }
+  },
+  "Redis": { "ConnectionString": "localhost:6379" },
+  "OpenTelemetry": { "OtlpEndpoint": "http://localhost:4317" }
 }
 ```
 
 ---
 
-## DI Registration (Program.cs sketch)
+## DI Registration (Program.cs)
 
 ```csharp
-builder.Services
-    .AddInfrastructure(builder.Configuration)
-    .AddSingleton<ILoadBalancer, RoundRobinLoadBalancer>()
-    .AddHostedService<JobDispatcherWorker>()
-    .AddHostedService<HeartbeatMonitorWorker>();
+builder.Services.AddInfrastructure(builder.Configuration, "JobOrchestrator");
+builder.Services.AddSingleton<ILoadBalancer, RoundRobinLoadBalancer>();
+
+builder.Services.Configure<HeartbeatMonitorOptions>(
+    builder.Configuration.GetSection(HeartbeatMonitorOptions.SectionName));
+
+builder.Services.AddHostedService<JobDispatcherWorker>();
+builder.Services.AddHostedService<HeartbeatMonitorWorker>();
 ```

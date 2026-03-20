@@ -2,291 +2,131 @@
 
 ## Responsibility
 
-The Workflow Host is a **Worker Service** deployed as a Kubernetes DaemonSet (one instance per node). Its responsibilities are:
-
-1. Register itself with the system on startup
-2. Consume `JobAssignedEvent` from its dedicated host-specific Redis Stream
-3. Spawn a `WorkflowEngine` child process per assigned job
-4. Monitor child processes and relay cancel requests with a grace period
-5. Keep its own host heartbeat alive in Redis
-
----
-
-## How It Works (Overview)
-
-```
-┌────────────────────────────────────────────────────────────┐
-│                      WorkflowHost                           │
-│                                                            │
-│  JobConsumerWorker          CancelConsumerWorker           │
-│  ─────────────────          ─────────────────────          │
-│  Consume JobAssignedEvent   Consume JobCancelRequestedEvent │
-│       ↓                          ↓                         │
-│  Spawn WorkflowEngine        Find running process          │
-│  child process               Send CancellationToken        │
-│       ↓                      Wait grace period             │
-│  Track PID + JobId           Force-kill if needed          │
-│                                                            │
-│  HostHeartbeatWorker                                       │
-│  ──────────────────                                        │
-│  Refresh host heartbeat key in Redis every 10s             │
-└────────────────────────────────────────────────────────────┘
-```
+The Workflow Host is a worker service deployed as a Kubernetes DaemonSet (one instance per node). Its responsibilities are:
+1. Register itself in the platform database on startup
+2. Consume `JobAssignedEvent` from its host-specific Redis Stream and spawn a `WorkflowEngine` process for each job
+3. Track active processes for cancellation
+4. Relay `JobCancelRequestedEvent` to the correct running process
+5. Maintain a Redis heartbeat key so `HeartbeatMonitorWorker` knows this host is alive
 
 ---
 
 ## Host Identity
 
-Each Workflow Host has a unique `HostId` derived from the Kubernetes node name (set via downward API env var `NODE_NAME`). This means host identity is stable across pod restarts on the same node.
-
+The host ID is derived from:
 ```csharp
-// Resolved at startup
-var hostId = Environment.GetEnvironmentVariable("NODE_NAME")
-    ?? Environment.MachineName;   // local dev fallback
+Environment.GetEnvironmentVariable("NODE_NAME") ?? Environment.MachineName
 ```
 
-### Host Registration on Startup
-
-On startup, the host writes its record to the database and begins refreshing its heartbeat:
-
-```csharp
-// In Program.cs or a startup task
-await hostRegistry.RegisterAsync(new WorkflowHostRegistration(
-    HostId:      hostId,
-    HostGroupId: options.HostGroupId,  // from config
-    RegisteredAt: DateTimeOffset.UtcNow
-));
+In Kubernetes, `NODE_NAME` is injected via the Downward API:
+```yaml
+env:
+  - name: NODE_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: spec.nodeName
 ```
+
+The host subscribes to the stream `flowforge:host:{hostId}`. This stream is created/bootstrapped on startup.
 
 ---
 
-## Job Consumer Worker
+## JobConsumerWorker
 
-Subscribes to the host-specific Redis Stream `flowforge:host:{hostId}`.
+Consumes `JobAssignedEvent` from `flowforge:host:{hostId}` (consumer group `"workflow-host"`, consumer name = `hostId`).
+
+For each event, spawns a fire-and-forget `RunJobAsync` task. The consumer loop itself never awaits job completion — it immediately moves on to the next message.
 
 ```csharp
 protected override async Task ExecuteAsync(CancellationToken stoppingToken)
 {
-    await foreach (var @event in _consumer.ConsumeAsync<JobAssignedEvent>(
-        streamName:    StreamNames.HostStream(_hostId),
-        consumerGroup: "workflow-host",
-        consumerName:  _hostId,
-        ct:            stoppingToken))
+    await foreach (var @event in consumer.ConsumeAsync<JobAssignedEvent>(
+        StreamNames.HostStream(_hostId), "workflow-host", _hostId, stoppingToken))
     {
-        // Fire-and-forget with tracking; don't await here to allow parallel jobs
-        _ = SpawnEngineAsync(@event, stoppingToken);
-    }
-}
-
-private async Task SpawnEngineAsync(JobAssignedEvent @event, CancellationToken hostStopping)
-{
-    using var cts = CancellationTokenSource.CreateLinkedTokenSource(hostStopping);
-    _activeJobs[event.JobId] = cts;   // register for cancel lookup
-
-    try
-    {
-        await _processManager.RunAsync(
-            jobId:  @event.JobId,
-            ct:     cts.Token);
-    }
-    finally
-    {
-        _activeJobs.TryRemove(@event.JobId, out _);
+        _ = RunJobAsync(@event, stoppingToken);   // fire-and-forget
     }
 }
 ```
 
-> A `ConcurrentDictionary<Guid, CancellationTokenSource> _activeJobs` tracks running engines so cancel requests can reach them.
+`RunJobAsync` tracks its `CancellationTokenSource` in `_activeJobs` for cancel support, then calls `IProcessManager.RunAsync(jobId, automationId, connectionId, ct)`.
+
+On exception → DLQ write + remove from `_activeJobs`.
+
+### Cancellation
+```csharp
+public bool TryCancel(Guid jobId)
+{
+    if (_activeJobs.TryGetValue(jobId, out var cts))
+    {
+        cts.Cancel();
+        return true;
+    }
+    return false;
+}
+```
+Called by `CancelConsumerWorker`.
 
 ---
 
-## Process Manager
-
-### Interface
+## IProcessManager
 
 ```csharp
 public interface IProcessManager
 {
-    /// <summary>
-    /// Runs the WorkflowEngine for the given job.
-    /// Returns when the engine process exits.
-    /// Cancellation triggers graceful stop → force kill after grace period.
-    /// </summary>
-    Task RunAsync(Guid jobId, CancellationToken ct);
+    Task RunAsync(Guid jobId, Guid automationId, string connectionId, CancellationToken ct);
 }
 ```
 
-### DockerProcessManager (primary — K8s native)
+### NativeProcessManager
+Spawns `FlowForge.WorkflowEngine` as a child process. Environment variables set on the child:
+- `JOB_ID` = `jobId.ToString()`
+- `JOB_AUTOMATION_ID` = `automationId.ToString()`
+- `CONNECTION_ID` = `connectionId`
+- All environment variables from the parent process (includes connection strings, Redis config, etc.)
 
-In a Kubernetes environment, `WorkflowEngine` runs as an ephemeral container (or via `docker run` if Docker-in-Docker is configured). Cancellation sends `SIGTERM` first, then `SIGKILL` after the grace period.
+Awaits process exit. If the `CancellationToken` fires, sends `SIGTERM` to the process and awaits graceful exit.
 
-```csharp
-public class DockerProcessManager : IProcessManager
-{
-    private readonly DockerProcessOptions _options;
-
-    public async Task RunAsync(Guid jobId, CancellationToken ct)
-    {
-        var containerName = $"engine-{jobId:N}";
-
-        // Start container
-        await RunCommandAsync("docker", [
-            "run", "--rm",
-            "--name", containerName,
-            "-e", $"JOB_ID={jobId}",
-            "-e", $"REDIS_CONNECTION={_options.RedisConnection}",
-            _options.EngineImage
-        ]);
-
-        // Wait for exit or cancellation
-        try
-        {
-            await WaitForContainerAsync(containerName, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            // Graceful: send SIGTERM, wait grace period, then SIGKILL
-            await RunCommandAsync("docker", ["stop", "-t",
-                _options.GracePeriodSeconds.ToString(), containerName]);
-        }
-    }
-}
-```
-
-### NativeProcessManager (fallback — Linux process group)
-
-Used in non-Docker or local dev environments.
-
-```csharp
-public class NativeProcessManager : IProcessManager
-{
-    public async Task RunAsync(Guid jobId, CancellationToken ct)
-    {
-        var enginePath = _options.EnginePath;  // path to WorkflowEngine binary
-
-        using var process = new Process
-        {
-            StartInfo = new ProcessStartInfo(enginePath)
-            {
-                Arguments = $"--job-id {jobId}",
-                UseShellExecute = false,
-
-                // Group the engine + any children it spawns
-                // On Linux: new session = new process group
-            }
-        };
-
-        process.Start();
-
-        ct.Register(() =>
-        {
-            // SIGTERM to entire process group
-            KillProcessGroup(process.Id, signal: Sigterm);
-
-            // Allow grace period, then SIGKILL
-            _ = Task.Delay(_options.GracePeriodMs)
-                    .ContinueWith(_ => KillProcessGroup(process.Id, signal: Sigkill));
-        });
-
-        await process.WaitForExitAsync(ct);
-    }
-
-    private static void KillProcessGroup(int pid, int signal)
-        => Syscall.Kill(-pid, signal);   // negative PID targets whole group
-}
-```
-
-### Registration (choose via config)
-
-```csharp
-var processManagerType = builder.Configuration["WorkflowHost:ProcessManager"];
-
-if (processManagerType == "Docker")
-    builder.Services.AddSingleton<IProcessManager, DockerProcessManager>();
-else
-    builder.Services.AddSingleton<IProcessManager, NativeProcessManager>();
-```
+### DockerProcessManager
+Runs `WorkflowEngine` inside a Docker container via `docker run`. Used when WorkflowHost itself runs outside a container but jobs need container isolation.
 
 ---
 
-## Cancel Consumer Worker
+## CancelConsumerWorker
 
-Subscribes to `flowforge:job-cancel-requested` and cancels the matching running engine.
+Consumes `JobCancelRequestedEvent` from `flowforge:job-cancel-requested` (consumer group `"workflow-host"`).
 
 ```csharp
-protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-{
-    await foreach (var @event in _consumer.ConsumeAsync<JobCancelRequestedEvent>(
-        StreamNames.JobCancelRequested, "workflow-host", _hostId, stoppingToken))
-    {
-        if (_activeJobs.TryGetValue(@event.JobId, out var cts))
-        {
-            _logger.LogInformation("Cancelling job {JobId}", @event.JobId);
-            await cts.CancelAsync();
-        }
-        else
-        {
-            // Job is not running on this host — ignore
-            _logger.LogDebug(
-                "Cancel requested for job {JobId} which is not running on this host",
-                @event.JobId);
-        }
-    }
-}
+var jobConsumer = hostedServices
+    .OfType<JobConsumerWorker>()
+    .Single();
+
+if (@event.HostId == Guid.Empty || @event.HostId == _hostIdGuid)
+    jobConsumer.TryCancel(@event.JobId);
 ```
 
-The cancellation token reaching `IProcessManager.RunAsync` is what triggers the graceful stop. The `WorkflowEngine` itself handles the `Cancelled` status update via its own reporting mechanism.
+`HostId == Guid.Empty` means broadcast cancel (cancel on whichever host holds the job). If `TryCancel` returns `false` the event is silently acknowledged — the job is not on this host.
 
 ---
 
-## Host Heartbeat Worker
+## HostHeartbeatWorker
 
-Keeps the host's heartbeat key alive in Redis. If this key expires, `JobOrchestrator` will stop routing new jobs to this host.
+Publishes `host:heartbeat:{hostId}` to Redis every `HostHeartbeatOptions.PublishIntervalSeconds` seconds (default: 10). The key TTL is 30 seconds — if the host stops publishing, `HeartbeatMonitorWorker` will detect the expiry after at most 30 seconds and mark the host offline.
 
-```csharp
-protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-{
-    while (!stoppingToken.IsCancellationRequested)
-    {
-        await _redis.SetAsync(
-            key:    $"host:heartbeat:{_hostId}",
-            value:  DateTimeOffset.UtcNow.ToString("O"),
-            expiry: TimeSpan.FromSeconds(30));
-
-        await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
-    }
-
-    // On graceful shutdown — mark host offline
-    await _hostRegistry.MarkOfflineAsync(_hostId);
+```json
+// appsettings.json
+"HostHeartbeat": {
+  "PublishIntervalSeconds": 10
 }
 ```
 
 ---
 
-## Kubernetes: DaemonSet Notes
+## Health Checks
 
-Because WorkflowHost runs as a DaemonSet, exactly one pod runs per node.
-
-```yaml
-# k8s/workflow-host/daemonset.yaml (sketch)
-spec:
-  template:
-    spec:
-      containers:
-        - name: workflow-host
-          env:
-            - name: NODE_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: spec.nodeName
-            - name: HOST_GROUP_ID
-              valueFrom:
-                configMapKeyRef:
-                  name: app-config
-                  key: defaultHostGroupId
 ```
-
-`NODE_NAME` is injected by Kubernetes downward API — the host uses this as its stable identity.
+GET /health/live   → 200 always (liveness)
+GET /health/ready  → checks PostgreSQL (job DB) + Redis
+```
 
 ---
 
@@ -294,34 +134,35 @@ spec:
 
 ```json
 {
-  "WorkflowHost": {
-    "HostGroupId": "00000000-0000-0000-0000-000000000001",
-    "ProcessManager": "Docker",
-    "GracePeriodSeconds": 30,
-    "MaxConcurrentJobs": 5
+  "HostHeartbeat": {
+    "PublishIntervalSeconds": 10
   },
-  "Docker": {
-    "EngineImage": "flowforge/workflow-engine:latest",
-    "GracePeriodSeconds": 30
+  "ConnectionStrings": {
+    "DefaultConnection": "Host=localhost;Port=5433;Database=flowforge_minion;Username=postgres;Password=postgres"
   },
-  "Redis": {
-    "ConnectionString": "redis:6379"
-  }
+  "JobConnections": {
+    "wf-jobs-minion": {
+      "ConnectionString": "Host=localhost;Port=5433;Database=flowforge_minion;Username=postgres;Password=postgres",
+      "Provider": "PostgreSQL"
+    }
+  },
+  "Redis": { "ConnectionString": "localhost:6379" },
+  "OpenTelemetry": { "OtlpEndpoint": "http://localhost:4317" }
 }
 ```
 
 ---
 
-## DI Registration (Program.cs sketch)
+## DI Registration (Program.cs)
 
 ```csharp
-var hostId = Environment.GetEnvironmentVariable("NODE_NAME") ?? Environment.MachineName;
-builder.Services.AddSingleton(_ => new HostIdentity(hostId));
+builder.Services.AddInfrastructure(builder.Configuration, "WorkflowHost");
+builder.Services.AddSingleton<IProcessManager, NativeProcessManager>();
 
-builder.Services
-    .AddInfrastructure(builder.Configuration)
-    .AddSingleton<IProcessManager, DockerProcessManager>()  // or NativeProcessManager
-    .AddHostedService<JobConsumerWorker>()
-    .AddHostedService<CancelConsumerWorker>()
-    .AddHostedService<HostHeartbeatWorker>();
+builder.Services.Configure<HostHeartbeatOptions>(
+    builder.Configuration.GetSection(HostHeartbeatOptions.SectionName));
+
+builder.Services.AddHostedService<JobConsumerWorker>();
+builder.Services.AddHostedService<CancelConsumerWorker>();
+builder.Services.AddHostedService<HostHeartbeatWorker>();
 ```
