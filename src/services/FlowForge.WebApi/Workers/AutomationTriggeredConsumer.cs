@@ -60,7 +60,9 @@ public class AutomationTriggeredConsumer(
                     connectionId: hostGroup.ConnectionId,
                     hostGroupId: automation.HostGroupId,
                     triggeredAt: @event.TriggeredAt,
-                    timeoutSeconds: @event.TimeoutSeconds);
+                    timeoutSeconds: @event.TimeoutSeconds,
+                    retryAttempt: @event.RetryAttempt,
+                    maxRetries: @event.MaxRetries);
 
                 automation.SetActiveJob(job.Id);
                 await outboxWriter.WriteAsync(new JobCreatedEvent(

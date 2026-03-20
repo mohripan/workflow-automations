@@ -10,6 +10,7 @@ public record AutomationResponse(
     string TaskId,
     bool IsEnabled,
     int? TimeoutSeconds,
+    int MaxRetries,
     List<TriggerResponse> Triggers,
     TriggerConditionResponse TriggerCondition,
     DateTimeOffset CreatedAt,

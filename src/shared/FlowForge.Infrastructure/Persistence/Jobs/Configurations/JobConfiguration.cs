@@ -12,5 +12,7 @@ public class JobConfiguration : IEntityTypeConfiguration<Job>
         builder.Property(x => x.Status).IsRequired();
         builder.Property(x => x.Message).HasMaxLength(1000);
         builder.Property(x => x.TimeoutSeconds);
+        builder.Property(x => x.RetryAttempt).HasDefaultValue(0);
+        builder.Property(x => x.MaxRetries).HasDefaultValue(0);
     }
 }

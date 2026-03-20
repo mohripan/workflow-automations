@@ -3,6 +3,7 @@ using FlowForge.Domain.Enums;
 using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.DeadLetter;
+using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.Infrastructure.Telemetry;
 using System.Text.Json;
@@ -56,6 +57,27 @@ public class JobStatusChangedConsumer(
                     if (automation is not null)
                     {
                         automation.ClearActiveJob();
+
+                        // Schedule retry if the job failed and retries remain
+                        if (@event.Status is JobStatus.Error or JobStatus.CompletedUnsuccessfully
+                            && job.RetryAttempt < job.MaxRetries)
+                        {
+                            var outboxWriter = scope.ServiceProvider.GetRequiredService<IOutboxWriter>();
+                            await outboxWriter.WriteAsync(new AutomationTriggeredEvent(
+                                AutomationId: automation.Id,
+                                HostGroupId:  automation.HostGroupId,
+                                ConnectionId: @event.ConnectionId,
+                                TaskId:       job.TaskId,
+                                TriggeredAt:  DateTimeOffset.UtcNow,
+                                TimeoutSeconds: job.TimeoutSeconds,
+                                MaxRetries:   job.MaxRetries,
+                                RetryAttempt: job.RetryAttempt + 1), stoppingToken);
+
+                            logger.LogInformation(
+                                "Job {JobId} failed (attempt {Attempt}/{Max}); scheduling retry.",
+                                job.Id, job.RetryAttempt + 1, job.MaxRetries);
+                        }
+
                         await automationRepo.SaveAsync(automation, stoppingToken);
                     }
                 }

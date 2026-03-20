@@ -14,10 +14,12 @@ public class Job : BaseEntity<Guid>
     public string? Message { get; private set; }
     public DateTimeOffset? TriggeredAt { get; private set; }
     public int? TimeoutSeconds { get; private set; }
+    public int RetryAttempt { get; private set; }
+    public int MaxRetries { get; private set; }
 
     private Job() { }
 
-    public static Job Create(Guid automationId, string taskId, string connectionId, Guid hostGroupId, DateTimeOffset triggeredAt, int? timeoutSeconds = null)
+    public static Job Create(Guid automationId, string taskId, string connectionId, Guid hostGroupId, DateTimeOffset triggeredAt, int? timeoutSeconds = null, int retryAttempt = 0, int maxRetries = 0)
     {
         return new Job
         {
@@ -28,7 +30,9 @@ public class Job : BaseEntity<Guid>
             HostGroupId = hostGroupId,
             Status = JobStatus.Pending,
             TriggeredAt = triggeredAt,
-            TimeoutSeconds = timeoutSeconds
+            TimeoutSeconds = timeoutSeconds,
+            RetryAttempt = retryAttempt,
+            MaxRetries = maxRetries
         };
     }
 
