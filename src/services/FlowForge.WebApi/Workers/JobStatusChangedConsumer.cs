@@ -2,8 +2,10 @@ using FlowForge.Contracts.Events;
 using FlowForge.Domain.Enums;
 using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.DeadLetter;
 using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.Infrastructure.Telemetry;
+using System.Text.Json;
 using FlowForge.WebApi.DTOs.Responses;
 using FlowForge.WebApi.Hubs;
 using Microsoft.AspNetCore.SignalR;
@@ -13,6 +15,7 @@ public class JobStatusChangedConsumer(
     IMessageConsumer consumer,
     IServiceScopeFactory scopeFactory,
     IHubContext<JobStatusHub, IJobStatusClient> hubContext,
+    IDlqWriter dlqWriter,
     ILogger<JobStatusChangedConsumer> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -67,7 +70,12 @@ public class JobStatusChangedConsumer(
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to process JobStatusChangedEvent for job {JobId}", @event.JobId);
+                logger.LogError(ex, "Failed to process JobStatusChangedEvent for job {JobId}. Sending to DLQ.", @event.JobId);
+                await dlqWriter.WriteAsync(
+                    sourceStream: StreamNames.JobStatusChanged,
+                    messageId: @event.JobId.ToString(),
+                    payload: JsonSerializer.Serialize(@event),
+                    error: ex.Message);
             }
         }
     }

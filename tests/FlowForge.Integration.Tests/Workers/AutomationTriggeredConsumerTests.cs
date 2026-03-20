@@ -3,6 +3,7 @@ using FlowForge.Domain.Entities;
 using FlowForge.Domain.Repositories;
 using FlowForge.Domain.ValueObjects;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.DeadLetter;
 using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.Infrastructure.Persistence.Platform;
 using FlowForge.Infrastructure.Repositories;
@@ -192,7 +193,7 @@ public class AutomationTriggeredConsumerTests : IAsyncLifetime
         IMessageConsumer consumer,
         IServiceProvider sp,
         Microsoft.Extensions.Logging.ILogger<AutomationTriggeredConsumer> logger)
-        : AutomationTriggeredConsumer(consumer, sp.GetRequiredService<IServiceScopeFactory>(), logger)
+        : AutomationTriggeredConsumer(consumer, sp.GetRequiredService<IServiceScopeFactory>(), NSubstitute.Substitute.For<IDlqWriter>(), logger)
     {
         public Task RunAsync(CancellationToken ct) => ExecuteAsync(ct);
     }

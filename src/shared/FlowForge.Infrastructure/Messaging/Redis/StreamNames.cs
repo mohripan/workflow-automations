@@ -8,6 +8,7 @@ public static class StreamNames
     public const string JobAssigned = "flowforge:job-assigned";
     public const string JobStatusChanged = "flowforge:job-status-changed";
     public const string JobCancelRequested = "flowforge:job-cancel-requested";
+    public const string Dlq = "flowforge:dlq";
 
     public static string HostStream(string hostId) => $"flowforge:host:{hostId}";
 

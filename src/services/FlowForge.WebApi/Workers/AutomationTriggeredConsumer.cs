@@ -4,15 +4,18 @@ using FlowForge.Domain.Enums;
 using FlowForge.Domain.Exceptions;
 using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.DeadLetter;
 using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.Infrastructure.Telemetry;
+using System.Text.Json;
 
 namespace FlowForge.WebApi.Workers;
 
 public class AutomationTriggeredConsumer(
     IMessageConsumer consumer,
     IServiceScopeFactory scopeFactory,
+    IDlqWriter dlqWriter,
     ILogger<AutomationTriggeredConsumer> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -79,7 +82,12 @@ public class AutomationTriggeredConsumer(
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Failed to process AutomationTriggeredEvent for automation {AutomationId}", @event.AutomationId);
+                logger.LogError(ex, "Failed to process AutomationTriggeredEvent for automation {AutomationId}. Sending to DLQ.", @event.AutomationId);
+                await dlqWriter.WriteAsync(
+                    sourceStream: StreamNames.AutomationTriggered,
+                    messageId: @event.AutomationId.ToString(),
+                    payload: JsonSerializer.Serialize(@event),
+                    error: ex.Message);
             }
         }
     }

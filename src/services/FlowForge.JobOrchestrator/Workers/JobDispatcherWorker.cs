@@ -3,7 +3,9 @@ using FlowForge.Contracts.Events;
 using FlowForge.Domain.Enums;
 using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.DeadLetter;
 using FlowForge.Infrastructure.Messaging.Redis;
+using System.Text.Json;
 using FlowForge.JobOrchestrator.LoadBalancing;
 
 namespace FlowForge.JobOrchestrator.Workers;
@@ -14,6 +16,7 @@ public class JobDispatcherWorker(
     IWorkflowHostRepository hostRepo,
     IServiceProvider serviceProvider,
     ILoadBalancer loadBalancer,
+    IDlqWriter dlqWriter,
     ILogger<JobDispatcherWorker> logger) : BackgroundService
 {
     private static readonly ActivitySource _activitySource = new("FlowForge.JobOrchestrator");
@@ -61,7 +64,12 @@ public class JobDispatcherWorker(
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Error dispatching job {JobId}", @event.JobId);
+                logger.LogError(ex, "Error dispatching job {JobId}. Sending to DLQ.", @event.JobId);
+                await dlqWriter.WriteAsync(
+                    sourceStream: StreamNames.JobCreated,
+                    messageId: @event.JobId.ToString(),
+                    payload: JsonSerializer.Serialize(@event),
+                    error: ex.Message);
             }
         }
     }

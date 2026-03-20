@@ -1,5 +1,6 @@
 using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.DeadLetter;
 using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.Infrastructure.Caching;
 using FlowForge.Infrastructure.Telemetry;
@@ -39,6 +40,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMessageConsumer, RedisStreamConsumer>();
         services.AddSingleton<IStreamBootstrapper, RedisStreamBootstrapper>();
         services.AddSingleton<IRedisService, RedisService>();
+        services.AddSingleton<IDlqWriter, DlqWriter>();
         return services;
     }
 

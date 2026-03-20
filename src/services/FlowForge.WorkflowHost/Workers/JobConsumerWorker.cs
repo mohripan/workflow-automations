@@ -1,14 +1,17 @@
 using System.Collections.Concurrent;
 using FlowForge.Contracts.Events;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.DeadLetter;
 using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.WorkflowHost.ProcessManagement;
+using System.Text.Json;
 
 namespace FlowForge.WorkflowHost.Workers;
 
 public class JobConsumerWorker(
     IMessageConsumer consumer,
     IProcessManager processManager,
+    IDlqWriter dlqWriter,
     ILogger<JobConsumerWorker> logger) : BackgroundService
 {
     private readonly string _hostId = Environment.GetEnvironmentVariable("NODE_NAME") ?? Environment.MachineName;
@@ -35,7 +38,12 @@ public class JobConsumerWorker(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error running job {JobId}", @event.JobId);
+            logger.LogError(ex, "Error running job {JobId}. Sending to DLQ.", @event.JobId);
+            await dlqWriter.WriteAsync(
+                sourceStream: StreamNames.HostStream(_hostId),
+                messageId: @event.JobId.ToString(),
+                payload: JsonSerializer.Serialize(@event),
+                error: ex.Message);
         }
         finally
         {

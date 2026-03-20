@@ -44,24 +44,35 @@ public class RedisStreamConsumer(IConnectionMultiplexer redis) : IMessageConsume
                 var json          = entry.Values.FirstOrDefault(v => v.Name == "payload").Value;
                 var traceparentRv = entry.Values.FirstOrDefault(v => v.Name == "traceparent").Value;
 
-                if (!json.IsNull)
+                if (json.IsNull)
                 {
-                    // Restore trace context propagated from the publisher
-                    ActivityContext parentContext = default;
-                    if (!traceparentRv.IsNull)
-                        ActivityContext.TryParse((string)traceparentRv!, null, out parentContext);
-
-                    using var activity = FlowForgeActivitySources.Messaging.StartActivity(
-                        $"consume {streamName}", ActivityKind.Consumer, parentContext);
-
-                    var @event = JsonSerializer.Deserialize<TEvent>((string)json!);
-                    if (@event != null)
-                    {
-                        yield return @event;
-                    }
+                    await _db.StreamAcknowledgeAsync(streamName, consumerGroup, entry.Id);
+                    continue;
                 }
 
-                await _db.StreamAcknowledgeAsync(streamName, consumerGroup, entry.Id);
+                // Restore trace context propagated from the publisher
+                ActivityContext parentContext = default;
+                if (!traceparentRv.IsNull)
+                    ActivityContext.TryParse((string)traceparentRv!, null, out parentContext);
+
+                using var activity = FlowForgeActivitySources.Messaging.StartActivity(
+                    $"consume {streamName}", ActivityKind.Consumer, parentContext);
+
+                var @event = JsonSerializer.Deserialize<TEvent>((string)json!);
+                if (@event is null)
+                {
+                    await _db.StreamAcknowledgeAsync(streamName, consumerGroup, entry.Id);
+                    continue;
+                }
+
+                try
+                {
+                    yield return @event;
+                }
+                finally
+                {
+                    await _db.StreamAcknowledgeAsync(streamName, consumerGroup, entry.Id);
+                }
             }
         }
     }

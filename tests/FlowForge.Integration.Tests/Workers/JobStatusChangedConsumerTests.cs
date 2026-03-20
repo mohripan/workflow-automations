@@ -4,6 +4,7 @@ using FlowForge.Domain.Enums;
 using FlowForge.Domain.Repositories;
 using FlowForge.Domain.ValueObjects;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.DeadLetter;
 using FlowForge.Infrastructure.Persistence.Platform;
 using FlowForge.Infrastructure.Repositories;
 using FlowForge.Integration.Tests.Infrastructure;
@@ -216,7 +217,7 @@ public class JobStatusChangedConsumerTests : IAsyncLifetime
         IServiceProvider sp,
         IHubContext<JobStatusHub, IJobStatusClient> hubContext,
         Microsoft.Extensions.Logging.ILogger<JobStatusChangedConsumer> logger)
-        : JobStatusChangedConsumer(consumer, sp.GetRequiredService<IServiceScopeFactory>(), hubContext, logger)
+        : JobStatusChangedConsumer(consumer, sp.GetRequiredService<IServiceScopeFactory>(), hubContext, NSubstitute.Substitute.For<IDlqWriter>(), logger)
     {
         public Task RunAsync(CancellationToken ct) => ExecuteAsync(ct);
     }
