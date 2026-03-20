@@ -10,13 +10,26 @@ public class NativeProcessManager(
 {
     public async Task RunAsync(Guid jobId, Guid automationId, string connectionId, CancellationToken ct)
     {
-        var enginePath = configuration["WorkflowHost:EnginePath"] ?? "FlowForge.WorkflowEngine.exe";
+        var enginePath = configuration["WorkflowHost:EnginePath"] ?? "FlowForge.WorkflowEngine";
         var redisConn = configuration["Redis:ConnectionString"] ?? "localhost:6379";
+
+        // Support both a native executable and a framework-dependent DLL (dotnet <dll>)
+        string fileName, arguments;
+        if (enginePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+        {
+            fileName = "dotnet";
+            arguments = enginePath;
+        }
+        else
+        {
+            fileName = enginePath;
+            arguments = string.Empty;
+        }
 
         var startInfo = new ProcessStartInfo
         {
-            FileName = enginePath,
-            Arguments = $"",
+            FileName = fileName,
+            Arguments = arguments,
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,

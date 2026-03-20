@@ -1,0 +1,12 @@
+**/.git
+**/.vs
+**/.vscode
+**/bin/
+**/obj/
+tests/
+docs/
+deploy/
+*.md
+*.user
+*.suo
+.gitignore

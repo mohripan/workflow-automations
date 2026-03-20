@@ -1,4 +1,7 @@
 services:
+
+  # ── Infrastructure ─────────────────────────────────────────────────────────
+
   # Platform database: Automations, HostGroups, WorkflowHosts
   postgres-platform:
     image: postgres:17-alpine
@@ -56,19 +59,6 @@ services:
       retries: 5
       start_period: 30s
 
-  redis:
-    image: redis:7-alpine
-    container_name: flowforge-redis
-    ports:
-      - "6379:6379"
-    command: ["redis-server", "--appendonly", "yes"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
   postgres-quartz:
     image: postgres:17-alpine
     container_name: flowforge-db-quartz
@@ -88,6 +78,19 @@ services:
       retries: 5
       start_period: 30s
 
+  redis:
+    image: redis:7-alpine
+    container_name: flowforge-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   jaeger:
     image: jaegertracing/all-in-one:latest
     container_name: flowforge-jaeger
@@ -96,6 +99,128 @@ services:
     ports:
       - "16686:16686"  # Jaeger UI
       - "4317:4317"    # OTLP gRPC
+
+  # ── Application Services ───────────────────────────────────────────────────
+
+  webapi:
+    build:
+      context: ../..
+      dockerfile: src/services/FlowForge.WebApi/Dockerfile
+    container_name: flowforge-webapi
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: "Host=postgres-platform;Database=flowforge_platform;Username=postgres;Password=postgres"
+      Redis__ConnectionString: "redis:6379"
+      JobConnections__wf-jobs-minion__ConnectionString: "Host=postgres-minion;Database=flowforge_minion;Username=postgres;Password=postgres"
+      JobConnections__wf-jobs-minion__Provider: "PostgreSQL"
+      JobConnections__wf-jobs-titan__ConnectionString: "Host=postgres-titan;Database=flowforge_titan;Username=postgres;Password=postgres"
+      JobConnections__wf-jobs-titan__Provider: "PostgreSQL"
+      OpenTelemetry__OtlpEndpoint: "http://jaeger:4317"
+      AllowedOrigins__0: "http://localhost:3000"
+    depends_on:
+      postgres-platform:
+        condition: service_healthy
+      postgres-minion:
+        condition: service_healthy
+      postgres-titan:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  job-automator:
+    build:
+      context: ../..
+      dockerfile: src/services/FlowForge.JobAutomator/Dockerfile
+    container_name: flowforge-job-automator
+    ports:
+      - "8081:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__QuartzConnection: "Host=postgres-quartz;Database=flowforge_quartz;Username=postgres;Password=postgres"
+      Redis__ConnectionString: "redis:6379"
+      OpenTelemetry__OtlpEndpoint: "http://jaeger:4317"
+      WebApi__BaseUrl: "http://flowforge-webapi:8080"
+    depends_on:
+      postgres-quartz:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      webapi:
+        condition: service_healthy
+
+  job-orchestrator:
+    build:
+      context: ../..
+      dockerfile: src/services/FlowForge.JobOrchestrator/Dockerfile
+    container_name: flowforge-job-orchestrator
+    ports:
+      - "8082:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__DefaultConnection: "Host=postgres-platform;Database=flowforge_platform;Username=postgres;Password=postgres"
+      Redis__ConnectionString: "redis:6379"
+      OpenTelemetry__OtlpEndpoint: "http://jaeger:4317"
+    depends_on:
+      postgres-platform:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  workflowhost-minion:
+    build:
+      context: ../..
+      dockerfile: src/services/FlowForge.WorkflowHost/Dockerfile
+    container_name: flowforge-workflowhost-minion
+    ports:
+      - "8083:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      NODE_NAME: "minion"
+      WorkflowHost__EnginePath: "/app/engine/FlowForge.WorkflowEngine.dll"
+      ConnectionStrings__DefaultConnection: "Host=postgres-platform;Database=flowforge_platform;Username=postgres;Password=postgres"
+      JobConnections__wf-jobs-minion__ConnectionString: "Host=postgres-minion;Database=flowforge_minion;Username=postgres;Password=postgres"
+      JobConnections__wf-jobs-minion__Provider: "PostgreSQL"
+      Redis__ConnectionString: "redis:6379"
+      OpenTelemetry__OtlpEndpoint: "http://jaeger:4317"
+    depends_on:
+      postgres-platform:
+        condition: service_healthy
+      postgres-minion:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  workflowhost-titan:
+    build:
+      context: ../..
+      dockerfile: src/services/FlowForge.WorkflowHost/Dockerfile
+    container_name: flowforge-workflowhost-titan
+    ports:
+      - "8084:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      NODE_NAME: "titan"
+      WorkflowHost__EnginePath: "/app/engine/FlowForge.WorkflowEngine.dll"
+      ConnectionStrings__DefaultConnection: "Host=postgres-platform;Database=flowforge_platform;Username=postgres;Password=postgres"
+      JobConnections__wf-jobs-titan__ConnectionString: "Host=postgres-titan;Database=flowforge_titan;Username=postgres;Password=postgres"
+      JobConnections__wf-jobs-titan__Provider: "PostgreSQL"
+      Redis__ConnectionString: "redis:6379"
+      OpenTelemetry__OtlpEndpoint: "http://jaeger:4317"
+    depends_on:
+      postgres-platform:
+        condition: service_healthy
+      postgres-titan:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   flowforge-db-platform-data:
