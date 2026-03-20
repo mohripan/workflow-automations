@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
 namespace FlowForge.Integration.Tests.Workers;
@@ -109,6 +110,6 @@ public class OutboxRelayWorkerTests : IAsyncLifetime
         services.AddLogging();
 
         var sp = services.BuildServiceProvider();
-        return new OutboxRelayWorker(redis, sp.GetRequiredService<IServiceScopeFactory>(), NullLogger<OutboxRelayWorker>.Instance);
+        return new OutboxRelayWorker(redis, sp.GetRequiredService<IServiceScopeFactory>(), Options.Create(new FlowForge.WebApi.Options.OutboxRelayOptions()), NullLogger<OutboxRelayWorker>.Instance);
     }
 }

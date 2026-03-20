@@ -4,6 +4,7 @@ using FlowForge.Infrastructure.Messaging.Redis;
 using OpenTelemetry.Trace;
 using FlowForge.WebApi.Hubs;
 using FlowForge.WebApi.Middleware;
+using FlowForge.WebApi.Options;
 using FlowForge.WebApi.Services;
 using FlowForge.WebApi.Workers;
 using FlowForge.WebApi.Validators;
@@ -44,6 +45,10 @@ builder.Services.AddValidatorsFromAssemblyContaining<CreateAutomationRequestVali
 
 // Add SignalR
 builder.Services.AddSignalR();
+
+// Worker options
+builder.Services.Configure<OutboxRelayOptions>(
+    builder.Configuration.GetSection(OutboxRelayOptions.SectionName));
 
 // Add Background Workers
 builder.Services.AddHostedService<AutomationTriggeredConsumer>();

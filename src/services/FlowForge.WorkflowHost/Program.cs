@@ -1,6 +1,7 @@
 using FlowForge.Infrastructure;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.Redis;
+using FlowForge.WorkflowHost.Options;
 using FlowForge.WorkflowHost.ProcessManagement;
 using FlowForge.WorkflowHost.Workers;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -11,6 +12,9 @@ builder.WebHost.UseUrls("http://+:8080");
 builder.Services.AddInfrastructure(builder.Configuration, "WorkflowHost");
 
 builder.Services.AddSingleton<IProcessManager, NativeProcessManager>();
+
+builder.Services.Configure<HostHeartbeatOptions>(
+    builder.Configuration.GetSection(HostHeartbeatOptions.SectionName));
 
 builder.Services.AddHostedService<JobConsumerWorker>();
 builder.Services.AddHostedService<CancelConsumerWorker>();

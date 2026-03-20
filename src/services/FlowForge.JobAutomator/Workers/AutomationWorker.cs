@@ -5,8 +5,10 @@ using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Telemetry;
 using FlowForge.JobAutomator.Cache;
 using FlowForge.JobAutomator.Evaluators;
+using FlowForge.JobAutomator.Options;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace FlowForge.JobAutomator.Workers;
 
@@ -16,8 +18,10 @@ public class AutomationWorker(
     TriggerConditionEvaluator conditionEvaluator,
     IMessagePublisher publisher,
     IRedisService redis,
+    IOptions<AutomationWorkerOptions> options,
     ILogger<AutomationWorker> logger) : BackgroundService
 {
+    private readonly AutomationWorkerOptions _options = options.Value;
     private static readonly ActivitySource _activitySource = new("FlowForge.JobAutomator");
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -33,12 +37,12 @@ public class AutomationWorker(
             catch (Exception ex)
             {
                 logger.LogError(ex, "AutomationWorker evaluation pass failed; retrying after delay");
-                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                await Task.Delay(TimeSpan.FromSeconds(_options.EvaluationIntervalSeconds), stoppingToken);
                 continue;
             }
 
             await redis.SetAsync("automator:last-evaluated", DateTimeOffset.UtcNow.ToString("O"));
-            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(_options.EvaluationIntervalSeconds), stoppingToken);
         }
 
         logger.LogInformation("AutomationWorker stopped");

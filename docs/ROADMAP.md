@@ -24,7 +24,7 @@ This document tracks planned improvements to FlowForge. Each item includes the m
 | 4 | [Job Timeout Enforcement](#4-job-timeout-enforcement) | Reliability | `[x]` |
 | 5 | [Dead Letter Queue for Poison Messages](#5-dead-letter-queue-for-poison-messages) | Reliability | `[x]` |
 | 6 | [Job Auto-Retry on Failure](#6-job-auto-retry-on-failure) | Business Logic | `[x]` |
-| 7 | [Configurable Polling Intervals via IOptions](#7-configurable-polling-intervals-via-ioptions) | Operability | `[ ]` |
+| 7 | [Configurable Polling Intervals via IOptions](#7-configurable-polling-intervals-via-ioptions) | Operability | `[x]` |
 
 ---
 

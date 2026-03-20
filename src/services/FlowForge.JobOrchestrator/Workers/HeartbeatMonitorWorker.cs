@@ -3,14 +3,18 @@ using FlowForge.Domain.Enums;
 using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure.Caching;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.JobOrchestrator.Options;
+using Microsoft.Extensions.Options;
 
 namespace FlowForge.JobOrchestrator.Workers;
 
 public class HeartbeatMonitorWorker(
     IWorkflowHostRepository hostRepo,
     IRedisService redis,
+    IOptions<HeartbeatMonitorOptions> options,
     ILogger<HeartbeatMonitorWorker> logger) : BackgroundService
 {
+    private readonly HeartbeatMonitorOptions _options = options.Value;
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -42,7 +46,7 @@ public class HeartbeatMonitorWorker(
                 logger.LogError(ex, "Error in HeartbeatMonitorWorker");
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(15), stoppingToken);
+            await Task.Delay(TimeSpan.FromSeconds(_options.CheckIntervalSeconds), stoppingToken);
         }
     }
 }

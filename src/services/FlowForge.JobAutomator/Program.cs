@@ -6,6 +6,7 @@ using FlowForge.JobAutomator.Cache;
 using FlowForge.JobAutomator.Clients;
 using FlowForge.JobAutomator.Evaluators;
 using FlowForge.JobAutomator.Initialization;
+using FlowForge.JobAutomator.Options;
 using FlowForge.JobAutomator.Workers;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection;
@@ -51,6 +52,10 @@ builder.Services.AddQuartz(q =>
     });
 });
 builder.Services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);
+
+// Worker options
+builder.Services.Configure<AutomationWorkerOptions>(
+    builder.Configuration.GetSection(AutomationWorkerOptions.SectionName));
 
 // CustomScript options
 builder.Services.Configure<CustomScriptOptions>(

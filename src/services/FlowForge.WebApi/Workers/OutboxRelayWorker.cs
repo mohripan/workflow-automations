@@ -1,5 +1,7 @@
 using FlowForge.Infrastructure.Persistence.Platform;
+using FlowForge.WebApi.Options;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
 namespace FlowForge.WebApi.Workers;
@@ -7,9 +9,11 @@ namespace FlowForge.WebApi.Workers;
 public class OutboxRelayWorker(
     IConnectionMultiplexer redis,
     IServiceScopeFactory scopeFactory,
+    IOptions<OutboxRelayOptions> options,
     ILogger<OutboxRelayWorker> logger) : BackgroundService
 {
     private readonly IDatabase _redisDb = redis.GetDatabase();
+    private readonly OutboxRelayOptions _options = options.Value;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -25,7 +29,7 @@ public class OutboxRelayWorker(
                 logger.LogError(ex, "Outbox relay pass failed");
             }
 
-            await Task.Delay(500, stoppingToken);
+            await Task.Delay(_options.PollIntervalMs, stoppingToken);
         }
     }
 
@@ -37,7 +41,7 @@ public class OutboxRelayWorker(
         var messages = await db.OutboxMessages
             .Where(m => m.SentAt == null)
             .OrderBy(m => m.CreatedAt)
-            .Take(50)
+            .Take(_options.BatchSize)
             .ToListAsync(ct);
 
         if (messages.Count == 0) return;

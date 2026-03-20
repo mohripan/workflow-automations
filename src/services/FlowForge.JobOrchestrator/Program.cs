@@ -2,6 +2,7 @@ using FlowForge.Infrastructure;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.JobOrchestrator.LoadBalancing;
+using FlowForge.JobOrchestrator.Options;
 using FlowForge.JobOrchestrator.Workers;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 
@@ -11,6 +12,9 @@ builder.WebHost.UseUrls("http://+:8080");
 builder.Services.AddInfrastructure(builder.Configuration, "JobOrchestrator");
 
 builder.Services.AddSingleton<ILoadBalancer, RoundRobinLoadBalancer>();
+
+builder.Services.Configure<HeartbeatMonitorOptions>(
+    builder.Configuration.GetSection(HeartbeatMonitorOptions.SectionName));
 
 builder.Services.AddHostedService<JobDispatcherWorker>();
 builder.Services.AddHostedService<HeartbeatMonitorWorker>();
