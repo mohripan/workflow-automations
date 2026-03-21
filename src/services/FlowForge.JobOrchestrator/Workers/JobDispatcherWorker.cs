@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using FlowForge.Contracts.Events;
+using Microsoft.Extensions.DependencyInjection;
 using FlowForge.Domain.Enums;
 using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure.Messaging.Abstractions;
@@ -13,7 +14,6 @@ namespace FlowForge.JobOrchestrator.Workers;
 public class JobDispatcherWorker(
     IMessageConsumer consumer,
     IMessagePublisher publisher,
-    IWorkflowHostRepository hostRepo,
     IServiceProvider serviceProvider,
     ILoadBalancer loadBalancer,
     IDlqWriter dlqWriter,
@@ -28,7 +28,9 @@ public class JobDispatcherWorker(
             try
             {
                 using var activity = _activitySource.StartActivity($"dispatch job {@event.JobId}");
-                var jobRepo = serviceProvider.GetRequiredKeyedService<IJobRepository>(@event.ConnectionId);
+                using var scope = serviceProvider.CreateScope();
+                var jobRepo = scope.ServiceProvider.GetRequiredKeyedService<IJobRepository>(@event.ConnectionId);
+                var hostRepo = scope.ServiceProvider.GetRequiredService<IWorkflowHostRepository>();
                 var job = await jobRepo.GetByIdAsync(@event.JobId, stoppingToken);
 
                 if (job == null)
@@ -58,7 +60,7 @@ public class JobDispatcherWorker(
                     HostId: selectedHost.Id,
                     AutomationId: job.AutomationId,
                     AssignedAt: DateTimeOffset.UtcNow
-                ), StreamNames.HostStream(selectedHost.Id.ToString()), stoppingToken);
+                ), StreamNames.HostStream(selectedHost.Name), stoppingToken);
 
                 logger.LogInformation("Job {JobId} assigned to host {HostId}", job.Id, selectedHost.Id);
             }

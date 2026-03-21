@@ -162,14 +162,24 @@ services:
       dockerfile: src/services/FlowForge.JobOrchestrator/Dockerfile
     container_name: flowforge-job-orchestrator
     ports:
-      - "8082:8080"
+      - "8092:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__DefaultConnection: "Host=postgres-platform;Database=flowforge_platform;Username=postgres;Password=postgres"
+      JobConnections__wf-jobs-minion__ConnectionString: "Host=postgres-minion;Database=flowforge_minion;Username=postgres;Password=postgres"
+      JobConnections__wf-jobs-minion__Provider: "PostgreSQL"
+      JobConnections__wf-jobs-titan__ConnectionString: "Host=postgres-titan;Database=flowforge_titan;Username=postgres;Password=postgres"
+      JobConnections__wf-jobs-titan__Provider: "PostgreSQL"
       Redis__ConnectionString: "redis:6379"
       OpenTelemetry__OtlpEndpoint: "http://jaeger:4317"
+      PendingJobScanner__ScanIntervalSeconds: "30"
+      PendingJobScanner__StaleAfterSeconds: "15"
     depends_on:
       postgres-platform:
+        condition: service_healthy
+      postgres-minion:
+        condition: service_healthy
+      postgres-titan:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -190,6 +200,12 @@ services:
       JobConnections__wf-jobs-minion__Provider: "PostgreSQL"
       Redis__ConnectionString: "redis:6379"
       OpenTelemetry__OtlpEndpoint: "http://jaeger:4317"
+      Smtp__Host: "sandbox.smtp.mailtrap.io"
+      Smtp__Port: "2525"
+      Smtp__Username: "f6ca15d3562e4a"
+      Smtp__Password: "68d121c2227bcb"
+      Smtp__EnableSsl: "true"
+      Smtp__DefaultFromAddress: "noreply@flowforge.io"
     depends_on:
       postgres-platform:
         condition: service_healthy
@@ -214,6 +230,12 @@ services:
       JobConnections__wf-jobs-titan__Provider: "PostgreSQL"
       Redis__ConnectionString: "redis:6379"
       OpenTelemetry__OtlpEndpoint: "http://jaeger:4317"
+      Smtp__Host: "sandbox.smtp.mailtrap.io"
+      Smtp__Port: "2525"
+      Smtp__Username: "f6ca15d3562e4a"
+      Smtp__Password: "68d121c2227bcb"
+      Smtp__EnableSsl: "true"
+      Smtp__DefaultFromAddress: "noreply@flowforge.io"
     depends_on:
       postgres-platform:
         condition: service_healthy

@@ -63,6 +63,11 @@ public static class DatabaseInitializer
 
         await context.HostGroups.AddRangeAsync(minionGroup, titanGroup);
 
+        // Seed WorkflowHosts (one per host group, named to match NODE_NAME in each container)
+        var minionHost = FlowForge.Domain.Entities.WorkflowHost.Create("minion", minionGroup.Id);
+        var titanHost = FlowForge.Domain.Entities.WorkflowHost.Create("titan", titanGroup.Id);
+        await context.WorkflowHosts.AddRangeAsync(minionHost, titanHost);
+
         // Seed sample Automation 1: Heartbeat Email (Minion)
         var emailTrigger = FlowForge.Domain.Entities.Trigger.Create(
             "heartbeat-schedule",

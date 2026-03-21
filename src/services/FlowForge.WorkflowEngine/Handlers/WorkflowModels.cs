@@ -23,7 +23,7 @@ public enum WorkflowResultStatus { Completed, Failed, Cancelled, Error }
 
 public record WorkflowResult(WorkflowResultStatus Status, string? Message = null)
 {
-    public static WorkflowResult Success() => new(WorkflowResultStatus.Completed);
+    public static WorkflowResult Success(string? message = null) => new(WorkflowResultStatus.Completed, message);
     public static WorkflowResult Failure(string reason) => new(WorkflowResultStatus.Failed, reason);
     public static WorkflowResult Cancellation() => new(WorkflowResultStatus.Cancelled);
     public static WorkflowResult Fault(string message) => new(WorkflowResultStatus.Error, message);

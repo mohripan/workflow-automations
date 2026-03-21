@@ -7,6 +7,7 @@ COPY src/shared/FlowForge.Infrastructure/FlowForge.Infrastructure.csproj src/sha
 COPY src/services/FlowForge.WorkflowEngine/FlowForge.WorkflowEngine.csproj src/services/FlowForge.WorkflowEngine/
 COPY src/services/FlowForge.WorkflowHost/FlowForge.WorkflowHost.csproj src/services/FlowForge.WorkflowHost/
 RUN dotnet restore src/services/FlowForge.WorkflowHost/FlowForge.WorkflowHost.csproj
+RUN dotnet restore src/services/FlowForge.WorkflowEngine/FlowForge.WorkflowEngine.csproj
 
 COPY src/ src/
 RUN dotnet publish src/services/FlowForge.WorkflowHost/FlowForge.WorkflowHost.csproj \

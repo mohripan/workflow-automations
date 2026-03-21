@@ -16,8 +16,12 @@ builder.Services.AddSingleton<ILoadBalancer, RoundRobinLoadBalancer>();
 builder.Services.Configure<HeartbeatMonitorOptions>(
     builder.Configuration.GetSection(HeartbeatMonitorOptions.SectionName));
 
+builder.Services.Configure<PendingJobScannerOptions>(
+    builder.Configuration.GetSection(PendingJobScannerOptions.SectionName));
+
 builder.Services.AddHostedService<JobDispatcherWorker>();
 builder.Services.AddHostedService<HeartbeatMonitorWorker>();
+builder.Services.AddHostedService<PendingJobScannerWorker>();
 
 // Health Checks
 var pgConnStr = builder.Configuration.GetConnectionString("DefaultConnection")

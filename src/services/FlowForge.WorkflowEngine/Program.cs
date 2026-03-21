@@ -5,6 +5,7 @@ using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure;
 using FlowForge.Infrastructure.Telemetry;
 using FlowForge.WorkflowEngine.Handlers;
+using FlowForge.WorkflowEngine.Options;
 using FlowForge.WorkflowEngine.Reporting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -26,6 +27,8 @@ var builder = Host.CreateApplicationBuilder(args);
 
 builder.Services.AddInfrastructure(builder.Configuration, "WorkflowEngine");
 builder.Services.AddHttpClient();
+
+builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection(SmtpOptions.SectionName));
 
 builder.Services.AddSingleton<WorkflowHandlerRegistry>();
 builder.Services.AddScoped<IWorkflowHandler, SendEmailHandler>();

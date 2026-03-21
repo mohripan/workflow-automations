@@ -6,14 +6,13 @@ namespace FlowForge.WorkflowHost.Workers;
 
 public class CancelConsumerWorker(
     IMessageConsumer consumer,
-    IEnumerable<IHostedService> hostedServices,
+    JobConsumerWorker jobConsumer,
     ILogger<CancelConsumerWorker> logger) : BackgroundService
 {
     private readonly string _hostId = Environment.GetEnvironmentVariable("NODE_NAME") ?? Environment.MachineName;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var jobConsumer = hostedServices.OfType<JobConsumerWorker>().Single();
 
         await foreach (var @event in consumer.ConsumeAsync<JobCancelRequestedEvent>(
             StreamNames.JobCancelRequested, "workflow-host", _hostId, stoppingToken))

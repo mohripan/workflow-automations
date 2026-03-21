@@ -16,7 +16,9 @@ builder.Services.AddSingleton<IProcessManager, NativeProcessManager>();
 builder.Services.Configure<HostHeartbeatOptions>(
     builder.Configuration.GetSection(HostHeartbeatOptions.SectionName));
 
-builder.Services.AddHostedService<JobConsumerWorker>();
+// Register JobConsumerWorker as singleton so CancelConsumerWorker can inject it directly
+builder.Services.AddSingleton<JobConsumerWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<JobConsumerWorker>());
 builder.Services.AddHostedService<CancelConsumerWorker>();
 builder.Services.AddHostedService<HostHeartbeatWorker>();
 
