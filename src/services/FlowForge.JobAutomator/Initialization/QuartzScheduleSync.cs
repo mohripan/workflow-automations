@@ -14,6 +14,8 @@ public interface IQuartzScheduleSync
 
 public class QuartzScheduleSync(ISchedulerFactory schedulerFactory) : IQuartzScheduleSync
 {
+    private static readonly System.Text.Json.JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
+
     public async Task SyncAsync(AutomationSnapshot automation, CancellationToken ct)
     {
         var scheduler = await schedulerFactory.GetScheduler(ct);
@@ -24,7 +26,7 @@ public class QuartzScheduleSync(ISchedulerFactory schedulerFactory) : IQuartzSch
 
         foreach (var trigger in automation.Triggers.Where(t => t.TypeId == TriggerTypes.Schedule))
         {
-            var config = JsonSerializer.Deserialize<ScheduleTriggerConfig>(trigger.ConfigJson);
+            var config = System.Text.Json.JsonSerializer.Deserialize<ScheduleTriggerConfig>(trigger.ConfigJson, _jsonOptions);
             if (config == null || string.IsNullOrWhiteSpace(config.CronExpression)) continue;
 
             var jobKey = new JobKey($"trigger-{trigger.Id}", $"automation-{automation.Id}");

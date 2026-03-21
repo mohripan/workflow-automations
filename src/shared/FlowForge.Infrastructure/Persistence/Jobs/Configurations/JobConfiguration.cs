@@ -9,6 +9,7 @@ public class JobConfiguration : IEntityTypeConfiguration<Job>
     public void Configure(EntityTypeBuilder<Job> builder)
     {
         builder.HasKey(x => x.Id);
+        builder.Property(x => x.Id).ValueGeneratedNever();
         builder.Property(x => x.Status).IsRequired();
         builder.Property(x => x.Message).HasMaxLength(1000);
         builder.Property(x => x.TimeoutSeconds);

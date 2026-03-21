@@ -57,35 +57,51 @@ public static class DatabaseInitializer
 
         logger.LogInformation("Seeding initial data...");
 
-        // Seed Host Groups
+        // Seed Host Groups and WorkflowHosts first, then SaveChanges so their
+        // database-assigned IDs are resolved before being referenced in Automations.
         var minionGroup = FlowForge.Domain.Entities.HostGroup.Create("Minion Group", "wf-jobs-minion");
         var titanGroup = FlowForge.Domain.Entities.HostGroup.Create("Titan Group", "wf-jobs-titan");
 
         await context.HostGroups.AddRangeAsync(minionGroup, titanGroup);
 
-        // Seed WorkflowHosts (one per host group, named to match NODE_NAME in each container)
         var minionHost = FlowForge.Domain.Entities.WorkflowHost.Create("minion", minionGroup.Id);
         var titanHost = FlowForge.Domain.Entities.WorkflowHost.Create("titan", titanGroup.Id);
         await context.WorkflowHosts.AddRangeAsync(minionHost, titanHost);
 
-        // Seed sample Automation 1: Heartbeat Email (Minion)
-        var emailTrigger = FlowForge.Domain.Entities.Trigger.Create(
-            "heartbeat-schedule",
-            TriggerTypes.Schedule,
-            "{\"cronExpression\": \"0 0/5 * * * ?\"}");
+        await context.SaveChangesAsync(); // commit so minionGroup.Id / titanGroup.Id are final
 
-        var emailConditionRoot = new TriggerConditionNode(null, "heartbeat-schedule", null);
+        // Now build Automations using the confirmed IDs.
+        const string resendTaskConfig = """
+            {
+              "interpreter": "/app/venv/bin/python3",
+              "scriptPath": "/app/examples/send-email-resend/send_email.py",
+              "packages": ["resend"],
+              "env": {
+                "RESEND_API_KEY": "re_2sywtsT7_9RUEfGsYSQR78XL5p3WUbeU4",
+                "EMAIL_FROM": "FlowForge <noreply@kinetixflow.site>",
+                "EMAIL_TO": "mohripan16@gmail.com",
+                "EMAIL_SUBJECT": "FlowForge E2E Test"
+              }
+            }
+            """;
+
+        var emailTrigger = FlowForge.Domain.Entities.Trigger.Create(
+            "every-minute",
+            TriggerTypes.Schedule,
+            "{\"cronExpression\": \"0 0/1 * * * ?\"}");
+
+        var emailConditionRoot = new TriggerConditionNode(null, "every-minute", null);
 
         var emailAutomation = FlowForge.Domain.Entities.Automation.Create(
-            "System Heartbeat Email",
-            "Sends a status email every 5 minutes",
-            "send-email",
+            "Resend E2E Email Test",
+            "Sends a test email via Resend every minute to verify the full job pipeline",
+            "run-script",
             minionGroup.Id,
             [emailTrigger],
-            emailConditionRoot
+            emailConditionRoot,
+            taskConfig: resendTaskConfig
         );
 
-        // Seed sample Automation 2: Data Cleanup (Titan)
         var sqlTrigger = FlowForge.Domain.Entities.Trigger.Create(
             "old-jobs-check",
             TriggerTypes.Sql,

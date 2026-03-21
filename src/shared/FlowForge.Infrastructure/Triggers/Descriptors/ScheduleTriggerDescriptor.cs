@@ -26,12 +26,14 @@ public class ScheduleTriggerDescriptor : ITriggerTypeDescriptor
                 EnumValues: null)
         ]);
 
+    private static readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
+
     public IReadOnlyList<string> ValidateConfig(string configJson)
     {
         var errors = new List<string>();
         try
         {
-            var cfg = JsonSerializer.Deserialize<ScheduleTriggerConfig>(configJson);
+            var cfg = JsonSerializer.Deserialize<ScheduleTriggerConfig>(configJson, _jsonOptions);
             if (string.IsNullOrWhiteSpace(cfg?.CronExpression))
                 errors.Add("cronExpression is required.");
             else if (cfg.CronExpression.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length < 6)

@@ -79,7 +79,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ITaskTypeRegistry>(sp =>
         {
             var registry = new TaskTypeRegistry();
-            registry.Register(new SendEmailTaskDescriptor());
             registry.Register(new HttpRequestTaskDescriptor());
             registry.Register(new RunScriptTaskDescriptor());
             return registry;

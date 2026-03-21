@@ -11,6 +11,7 @@ public class AutomationConfiguration : IEntityTypeConfiguration<Automation>
     public void Configure(EntityTypeBuilder<Automation> builder)
     {
         builder.HasKey(x => x.Id);
+        builder.Property(x => x.Id).ValueGeneratedNever();
         builder.Property(x => x.Name).IsRequired().HasMaxLength(200);
         builder.Property(x => x.IsEnabled).IsRequired();
         builder.Property(x => x.ActiveJobId);

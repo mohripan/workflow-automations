@@ -200,12 +200,6 @@ services:
       JobConnections__wf-jobs-minion__Provider: "PostgreSQL"
       Redis__ConnectionString: "redis:6379"
       OpenTelemetry__OtlpEndpoint: "http://jaeger:4317"
-      Smtp__Host: "sandbox.smtp.mailtrap.io"
-      Smtp__Port: "2525"
-      Smtp__Username: "f6ca15d3562e4a"
-      Smtp__Password: "68d121c2227bcb"
-      Smtp__EnableSsl: "true"
-      Smtp__DefaultFromAddress: "noreply@flowforge.io"
     depends_on:
       postgres-platform:
         condition: service_healthy
@@ -230,12 +224,6 @@ services:
       JobConnections__wf-jobs-titan__Provider: "PostgreSQL"
       Redis__ConnectionString: "redis:6379"
       OpenTelemetry__OtlpEndpoint: "http://jaeger:4317"
-      Smtp__Host: "sandbox.smtp.mailtrap.io"
-      Smtp__Port: "2525"
-      Smtp__Username: "f6ca15d3562e4a"
-      Smtp__Password: "68d121c2227bcb"
-      Smtp__EnableSsl: "true"
-      Smtp__DefaultFromAddress: "noreply@flowforge.io"
     depends_on:
       postgres-platform:
         condition: service_healthy

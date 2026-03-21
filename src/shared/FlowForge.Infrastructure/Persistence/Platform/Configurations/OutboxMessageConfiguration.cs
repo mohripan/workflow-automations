@@ -9,6 +9,7 @@ public class OutboxMessageConfiguration : IEntityTypeConfiguration<OutboxMessage
     public void Configure(EntityTypeBuilder<OutboxMessage> builder)
     {
         builder.HasKey(x => x.Id);
+        builder.Property(x => x.Id).ValueGeneratedNever();
         builder.Property(x => x.EventType).IsRequired().HasMaxLength(200);
         builder.Property(x => x.Payload).IsRequired();
         builder.Property(x => x.StreamName).IsRequired().HasMaxLength(200);
