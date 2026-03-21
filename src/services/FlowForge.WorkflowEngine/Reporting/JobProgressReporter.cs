@@ -7,13 +7,13 @@ namespace FlowForge.WorkflowEngine.Reporting;
 
 public interface IJobReporter
 {
-    Task ReportStatusAsync(Guid jobId, Guid automationId, string connectionId, JobStatus status, string? message = null, CancellationToken ct = default);
+    Task ReportStatusAsync(Guid jobId, Guid automationId, string connectionId, JobStatus status, string? message = null, string? outputJson = null, CancellationToken ct = default);
     Task RefreshHeartbeatAsync(Guid jobId, CancellationToken ct = default);
 }
 
 public class JobProgressReporter(IMessagePublisher publisher, IRedisService redis) : IJobReporter
 {
-    public async Task ReportStatusAsync(Guid jobId, Guid automationId, string connectionId, JobStatus status, string? message = null, CancellationToken ct = default)
+    public async Task ReportStatusAsync(Guid jobId, Guid automationId, string connectionId, JobStatus status, string? message = null, string? outputJson = null, CancellationToken ct = default)
     {
         await publisher.PublishAsync(new JobStatusChangedEvent(
             JobId: jobId,
@@ -21,7 +21,8 @@ public class JobProgressReporter(IMessagePublisher publisher, IRedisService redi
             ConnectionId: connectionId,
             Status: status,
             Message: message,
-            UpdatedAt: DateTimeOffset.UtcNow
+            UpdatedAt: DateTimeOffset.UtcNow,
+            OutputJson: outputJson
         ), null, ct);
     }
 

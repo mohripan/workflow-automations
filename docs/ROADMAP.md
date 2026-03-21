@@ -21,9 +21,9 @@ This document tracks the next phase of FlowForge development. The focus is on ma
 | 1 | [Task Parameters Propagation](#1-task-parameters-propagation) | Core / Bug Fix | `[x]` |
 | 2 | [Dockerize Application Services](#2-dockerize-application-services) | Infrastructure | `[x]` |
 | 3 | [End-to-End Send-Email via Mailtrap](#3-end-to-end-send-email-via-mailtrap) | E2E Demo | `[x]` |
-| 4 | [Job Dispatcher Resilience — No-Host Queuing](#4-job-dispatcher-resilience--no-host-queuing) | Reliability | `[ ]` |
-| 5 | [Task Type Discovery API](#5-task-type-discovery-api) | Developer Experience | `[ ]` |
-| 6 | [Structured Job Output](#6-structured-job-output) | Observability | `[ ]` |
+| 4 | [Job Dispatcher Resilience — No-Host Queuing](#4-job-dispatcher-resilience--no-host-queuing) | Reliability | `[x]` |
+| 5 | [Task Type Discovery API](#5-task-type-discovery-api) | Developer Experience | `[x]` |
+| 6 | [Structured Job Output](#6-structured-job-output) | Observability | `[x]` |
 
 ---
 

@@ -110,7 +110,11 @@ try
         _ => JobStatus.Error
     };
 
-    await reporter.ReportStatusAsync(jobId, automationId, connectionId, finalStatus, result.Message, CancellationToken.None);
+    var outputJson = context.Outputs.Count > 0
+        ? JsonSerializer.Serialize(context.Outputs)
+        : null;
+
+    await reporter.ReportStatusAsync(jobId, automationId, connectionId, finalStatus, result.Message, outputJson, CancellationToken.None);
     return result.Status == WorkflowResultStatus.Error ? 1 : 0;
 }
 catch (OperationCanceledException)

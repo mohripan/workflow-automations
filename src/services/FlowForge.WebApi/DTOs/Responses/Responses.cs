@@ -39,6 +39,7 @@ public record JobResponse(
     Guid? HostId,
     JobStatus Status,
     string? Message,
+    string? OutputJson,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt
 );

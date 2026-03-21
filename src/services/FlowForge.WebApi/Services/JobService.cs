@@ -33,7 +33,7 @@ public class JobService(
             var automation = await automationRepo.GetByIdAsync(job.AutomationId, ct);
             items.Add(new JobResponse(
                 job.Id, job.AutomationId, automation?.Name ?? "Unknown", job.HostGroupId,
-                job.HostId, job.Status, job.Message, job.CreatedAt, job.UpdatedAt
+                job.HostId, job.Status, job.Message, job.OutputJson, job.CreatedAt, job.UpdatedAt
             ));
         }
 
@@ -47,7 +47,7 @@ public class JobService(
 
         return new JobResponse(
             job.Id, job.AutomationId, automation?.Name ?? "Unknown", job.HostGroupId,
-            job.HostId, job.Status, job.Message, job.CreatedAt, job.UpdatedAt
+            job.HostId, job.Status, job.Message, job.OutputJson, job.CreatedAt, job.UpdatedAt
         );
     }
 

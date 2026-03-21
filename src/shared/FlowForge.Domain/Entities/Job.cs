@@ -17,6 +17,7 @@ public class Job : BaseEntity<Guid>
     public int RetryAttempt { get; private set; }
     public int MaxRetries { get; private set; }
     public string? TaskConfig { get; private set; }
+    public string? OutputJson { get; private set; }
 
     private Job() { }
 
@@ -50,6 +51,12 @@ public class Job : BaseEntity<Guid>
     public void SetMessage(string message)
     {
         Message = message;
+        UpdateTimestamp();
+    }
+
+    public void SetOutput(string? outputJson)
+    {
+        OutputJson = outputJson;
         UpdateTimestamp();
     }
 

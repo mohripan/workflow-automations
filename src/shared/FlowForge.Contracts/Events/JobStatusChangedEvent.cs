@@ -8,5 +8,6 @@ public record JobStatusChangedEvent(
     string ConnectionId,
     JobStatus Status,
     string? Message,
-    DateTimeOffset UpdatedAt
+    DateTimeOffset UpdatedAt,
+    string? OutputJson = null
 );

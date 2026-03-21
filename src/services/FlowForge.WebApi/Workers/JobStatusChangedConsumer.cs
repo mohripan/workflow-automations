@@ -39,6 +39,7 @@ public class JobStatusChangedConsumer(
 
                 job.Transition(@event.Status);
                 if (@event.Message is not null) job.SetMessage(@event.Message);
+                if (@event.OutputJson is not null) job.SetOutput(@event.OutputJson);
 
                 await jobRepo.SaveAsync(job, stoppingToken);
 

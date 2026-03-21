@@ -8,8 +8,11 @@ using FlowForge.Infrastructure.Persistence.Platform;
 using FlowForge.Infrastructure.Persistence.Jobs;
 using FlowForge.Infrastructure.Repositories;
 using FlowForge.Domain.Repositories;
+using FlowForge.Domain.Tasks;
 using FlowForge.Domain.Triggers;
 using FlowForge.Infrastructure.MultiDb;
+using FlowForge.Infrastructure.Tasks;
+using FlowForge.Infrastructure.Tasks.Descriptors;
 using FlowForge.Infrastructure.Triggers;
 using FlowForge.Infrastructure.Triggers.Descriptors;
 using Microsoft.EntityFrameworkCore;
@@ -26,6 +29,7 @@ public static class ServiceCollectionExtensions
         services.AddRedis(config);
         services.AddPersistence(config);
         services.AddTriggerTypeRegistry();
+        services.AddTaskTypeRegistry();
         if (serviceName is not null)
             services.AddFlowForgeTelemetry(config, serviceName);
         return services;
@@ -67,6 +71,19 @@ public static class ServiceCollectionExtensions
                 return new JobRepository(new JobsDbContext(optionsBuilder.Options));
             });
         }
+        return services;
+    }
+
+    private static IServiceCollection AddTaskTypeRegistry(this IServiceCollection services)
+    {
+        services.AddSingleton<ITaskTypeRegistry>(sp =>
+        {
+            var registry = new TaskTypeRegistry();
+            registry.Register(new SendEmailTaskDescriptor());
+            registry.Register(new HttpRequestTaskDescriptor());
+            registry.Register(new RunScriptTaskDescriptor());
+            return registry;
+        });
         return services;
     }
 
