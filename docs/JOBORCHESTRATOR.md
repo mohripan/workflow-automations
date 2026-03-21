@@ -5,6 +5,7 @@
 The Job Orchestrator is a worker service that:
 1. Consumes `JobCreatedEvent` from Redis and dispatches each job to an available host
 2. Monitors host heartbeats and marks unresponsive hosts offline
+3. Periodically re-queues jobs that are stuck in `Pending` status so they are dispatched once hosts come back online
 
 It has **read/write access to the job databases** (to update `Job.Status` and `Job.HostId`) and to the platform database (to read `WorkflowHost` records).
 
@@ -19,7 +20,7 @@ flowforge:job-created  ──►  JobDispatcherWorker
                           IJobRepository keyed by ConnectionId (job DB)
                           ILoadBalancer (round-robin)
                                   │
-                          publisher ──► flowforge:host:{selectedHostId}
+                          publisher ──► flowforge:host:{selectedHostName}
                                   │
                       (on error) DlqWriter ──► flowforge:dlq
 
@@ -29,7 +30,15 @@ Platform DB (WorkflowHosts table)
          ▼
 HeartbeatMonitorWorker (every N seconds)
          │
-    IRedisService → host:heartbeat:{hostId}   (set by WorkflowHost)
+    IRedisService → host:heartbeat:{hostName}   (set by WorkflowHost)
+
+
+Job DBs (all configured connections)
+         │
+         ▼
+PendingJobScannerWorker (every N seconds)
+         │
+    re-publishes JobCreatedEvent for stale Pending jobs
 ```
 
 ---
@@ -41,45 +50,16 @@ Consumes `JobCreatedEvent` from `flowforge:job-created` (consumer group `"job-or
 For each event:
 1. Load the `Job` from the job DB keyed by `event.ConnectionId`
 2. Load online hosts for `job.HostGroupId`
-3. If **no online hosts** → log warning and `continue` (job stays `Pending` — see Known Limitation below)
+3. If **no online hosts** → log warning and `continue` (job stays `Pending`; `PendingJobScannerWorker` will re-queue it)
 4. Select a host via `ILoadBalancer.Select(...)`
 5. Transition job to `Started`, assign `HostId`, call `jobRepo.SaveAsync`
-6. Publish `JobAssignedEvent` to `flowforge:host:{selectedHostId}`
+6. Publish `JobAssignedEvent` to `flowforge:host:{selectedHost.Name}`
 
 On exception → `IDlqWriter.WriteAsync` + continue (never crashes the consumer).
 
 Uses OpenTelemetry span: `"dispatch job {jobId}"`.
 
-```csharp
-// JobDispatcherWorker simplified
-await foreach (var @event in consumer.ConsumeAsync<JobCreatedEvent>(
-    StreamNames.JobCreated, "job-orchestrator", "orchestrator-1", stoppingToken))
-{
-    try
-    {
-        var jobRepo = serviceProvider.GetRequiredKeyedService<IJobRepository>(@event.ConnectionId);
-        var job = await jobRepo.GetByIdAsync(@event.JobId, stoppingToken);
-
-        var hosts   = await hostRepo.GetByGroupAsync(job.HostGroupId, stoppingToken);
-        var online  = hosts.Where(h => h.IsOnline).ToList();
-        if (online.Count == 0) { /* warn + continue */ continue; }
-
-        var host = loadBalancer.Select(online, job.HostGroupId);
-
-        job.Transition(JobStatus.Started);
-        job.AssignToHost(host.Id);
-        await jobRepo.SaveAsync(job, stoppingToken);
-
-        await publisher.PublishAsync(
-            new JobAssignedEvent(job.Id, @event.ConnectionId, host.Id, job.AutomationId, DateTimeOffset.UtcNow),
-            StreamNames.HostStream(host.Id.ToString()), stoppingToken);
-    }
-    catch (Exception ex) { /* DLQ + continue */ }
-}
-```
-
-### Known Limitation: No-Host Drop
-When no hosts are online the job is silently acknowledged and left in `Pending` status. There is no re-queue mechanism. If hosts come back online the job will never be dispatched. This is tracked as ROADMAP item #4.
+> **Note:** the routing key uses `selectedHost.Name` (matching the `NODE_NAME` env var on the WorkflowHost container), not the host's database GUID.
 
 ---
 
@@ -102,14 +82,36 @@ Maintains a `ConcurrentDictionary<Guid, int>` counter per host group. Each call 
 Runs every `HeartbeatMonitorOptions.CheckIntervalSeconds` seconds (default: 15).
 
 For every `WorkflowHost` in the platform DB:
-- Checks Redis key `host:heartbeat:{hostId}` (set by `HostHeartbeatWorker` in WorkflowHost with a 30-second TTL)
+- Checks Redis key `host:heartbeat:{host.Name}` (set by `HostHeartbeatWorker` in WorkflowHost with a 30-second TTL)
 - Key **absent** + host is `IsOnline=true` → `host.MarkOffline()` + save
 - Key **present** + host is `IsOnline=false` → `host.MarkOnline()` + save
+
+The key uses `host.Name` (the human-readable node name), which matches the `NODE_NAME` env var set on each WorkflowHost container.
 
 ```json
 // appsettings.json
 "HeartbeatMonitor": {
   "CheckIntervalSeconds": 15
+}
+```
+
+---
+
+## PendingJobScannerWorker
+
+Runs every `PendingJobScannerOptions.ScanIntervalSeconds` seconds (default: 30). After waiting, it:
+
+1. Reads all `JobConnections` keys from configuration
+2. For each connection, loads all `Pending` jobs older than `StaleAfterSeconds` (default: 15)
+3. Re-publishes `JobCreatedEvent` to `flowforge:job-created` for each stale job
+
+This allows jobs that were not dispatched (because no hosts were online) to be re-attempted once hosts recover. If a job has already been dispatched by the time the scanner runs, it will have transitioned out of `Pending` and will not be re-queued.
+
+```json
+// appsettings.json
+"PendingJobScanner": {
+  "ScanIntervalSeconds": 30,
+  "StaleAfterSeconds": 15
 }
 ```
 
@@ -137,12 +139,20 @@ GET /health/ready  → checks PostgreSQL (platform DB) + Redis
   "HeartbeatMonitor": {
     "CheckIntervalSeconds": 15
   },
+  "PendingJobScanner": {
+    "ScanIntervalSeconds": 30,
+    "StaleAfterSeconds": 15
+  },
   "ConnectionStrings": {
     "DefaultConnection": "Host=localhost;Database=flowforge_platform;Username=postgres;Password=postgres"
   },
   "JobConnections": {
     "wf-jobs-minion": {
       "ConnectionString": "Host=localhost;Port=5433;Database=flowforge_minion;Username=postgres;Password=postgres",
+      "Provider": "PostgreSQL"
+    },
+    "wf-jobs-titan": {
+      "ConnectionString": "Host=localhost;Port=5434;Database=flowforge_titan;Username=postgres;Password=postgres",
       "Provider": "PostgreSQL"
     }
   },
@@ -161,7 +171,10 @@ builder.Services.AddSingleton<ILoadBalancer, RoundRobinLoadBalancer>();
 
 builder.Services.Configure<HeartbeatMonitorOptions>(
     builder.Configuration.GetSection(HeartbeatMonitorOptions.SectionName));
+builder.Services.Configure<PendingJobScannerOptions>(
+    builder.Configuration.GetSection(PendingJobScannerOptions.SectionName));
 
 builder.Services.AddHostedService<JobDispatcherWorker>();
 builder.Services.AddHostedService<HeartbeatMonitorWorker>();
+builder.Services.AddHostedService<PendingJobScannerWorker>();
 ```

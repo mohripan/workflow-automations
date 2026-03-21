@@ -55,7 +55,8 @@ public record AutomationSnapshot(
     IReadOnlyList<TriggerSnapshot> Triggers,
     TriggerConditionNode ConditionRoot,
     int? TimeoutSeconds = null,   // propagated to job on trigger
-    int MaxRetries = 0);          // propagated to job on trigger
+    int MaxRetries = 0,           // propagated to job on trigger
+    string? TaskConfig = null);   // propagated to job on trigger — handler parameter JSON
 ```
 
 ---
@@ -107,7 +108,7 @@ Controlled by `AutomationWorkerOptions`:
 For each enabled automation:
 1. Evaluate every trigger via its `ITriggerEvaluator`, building a `Dictionary<string, bool>` keyed by trigger name
 2. Evaluate the `ConditionRoot` AND/OR tree against those results
-3. If the root is `true`, publish `AutomationTriggeredEvent` with `TimeoutSeconds` and `MaxRetries` from the snapshot
+3. If the root is `true`, publish `AutomationTriggeredEvent` with `TimeoutSeconds`, `MaxRetries`, and `TaskConfig` from the snapshot
 
 Records `FlowForgeMetrics.TriggersFired` (tag: `automation_id`) on each triggered event.
 

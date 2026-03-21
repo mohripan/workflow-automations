@@ -27,8 +27,11 @@ The Web API is an ASP.NET Core 10 application. Its responsibilities are:
 | `PUT` | `/api/automations/{id}/triggers/{triggerId}` | Update trigger |
 | `DELETE` | `/api/automations/{id}/triggers/{triggerId}` | Remove trigger |
 | `POST` | `/api/automations/{id}/triggers/{name}/webhook` | Fire webhook trigger |
-| `GET` | `/api/trigger-types` | List trigger type descriptors |
-| `POST` | `/api/trigger-types/{typeId}/validate` | Validate trigger config |
+| `GET` | `/api/triggers/types` | List trigger type descriptors |
+| `GET` | `/api/triggers/types/{typeId}` | Get single trigger type descriptor |
+| `POST` | `/api/triggers/types/{typeId}/validate-config` | Validate trigger config JSON |
+| `GET` | `/api/task-types` | List task type descriptors |
+| `GET` | `/api/task-types/{taskId}` | Get single task type descriptor |
 | `GET` | `/api/jobs` | List jobs |
 | `GET` | `/api/jobs/{id}` | Get job |
 | `POST` | `/api/jobs/{id}/cancel` | Cancel job |
@@ -63,9 +66,10 @@ public record CreateAutomationRequest(
     string TaskId,
     Guid HostGroupId,
     bool IsEnabled,
-    string ConditionRoot,         // JSON string of TriggerConditionNode tree
-    int? TimeoutSeconds = null,   // null = no timeout
-    int MaxRetries = 0);          // 0 = no retry
+    string ConditionRoot,          // JSON string of TriggerConditionNode tree
+    int? TimeoutSeconds = null,    // null = no timeout
+    int MaxRetries = 0,            // 0 = no retry
+    string? TaskConfig = null);    // JSON object of handler parameters
 
 public record UpdateAutomationRequest(
     string Name,
@@ -75,7 +79,8 @@ public record UpdateAutomationRequest(
     bool IsEnabled,
     string ConditionRoot,
     int? TimeoutSeconds = null,
-    int MaxRetries = 0);
+    int MaxRetries = 0,
+    string? TaskConfig = null);
 ```
 
 ### AutomationResponse
@@ -87,11 +92,11 @@ public record AutomationResponse(
     string TaskId,
     Guid HostGroupId,
     bool IsEnabled,
-    Guid? ActiveJobId,
     int? TimeoutSeconds,
     int MaxRetries,
-    string ConditionRoot,
-    IReadOnlyList<TriggerResponse> Triggers,
+    string? TaskConfig,
+    List<TriggerResponse> Triggers,
+    TriggerConditionResponse TriggerCondition,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 ```
@@ -110,16 +115,12 @@ public record TriggerResponse(
 public record JobResponse(
     Guid Id,
     Guid AutomationId,
-    string TaskId,
-    string ConnectionId,
+    string AutomationName,
     Guid HostGroupId,
     Guid? HostId,
     JobStatus Status,
     string? Message,
-    int RetryAttempt,
-    int MaxRetries,
-    int? TimeoutSeconds,
-    DateTimeOffset? TriggeredAt,
+    string? OutputJson,    // serialized context.Outputs; null until job completes
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 ```
@@ -134,7 +135,7 @@ Consumes `AutomationTriggeredEvent` from `flowforge:automation-triggered`.
 
 1. Load `Automation` and `HostGroup`; resolve `IJobRepository` by `ConnectionId`
 2. **Duplicate prevention:** if `automation.ActiveJobId` is set, check that job's status. If still active → skip. If terminal or missing → `automation.ClearActiveJob()` and continue
-3. `Job.Create(automationId, taskId, connectionId, hostGroupId, triggeredAt, timeoutSeconds, retryAttempt, maxRetries)`
+3. `Job.Create(automationId, taskId, connectionId, hostGroupId, triggeredAt, timeoutSeconds, retryAttempt, maxRetries, taskConfig)` — `taskConfig` is snapshotted from the event
 4. `automation.SetActiveJob(job.Id)`
 5. Write `JobCreatedEvent` to outbox
 6. `automationRepo.SaveAsync(automation)` — commits automation update + outbox in one transaction
@@ -148,7 +149,7 @@ On exception → `IDlqWriter.WriteAsync` + continue.
 
 Consumes `JobStatusChangedEvent` from `flowforge:job-status-changed`.
 
-1. Load job, call `job.Transition(@event.Status)` and optionally `job.SetMessage(@event.Message)`
+1. Load job, call `job.Transition(@event.Status)`, optionally `job.SetMessage(@event.Message)`, and optionally `job.SetOutput(@event.OutputJson)`
 2. `jobRepo.SaveAsync(job)`
 3. Record `FlowForgeMetrics.JobsCompleted` or `FlowForgeMetrics.JobsFailed` for terminal statuses
 4. If status `IsTerminal()`:

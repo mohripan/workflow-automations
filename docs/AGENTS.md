@@ -42,31 +42,31 @@ FlowForge is a .NET 10 workflow orchestration platform. It evaluates automation 
 
 ### WebApi (`FlowForge.WebApi`)
 ASP.NET Core web application. Handles the REST API, SignalR real-time push, and three background workers:
-- **AutomationTriggeredConsumer** — creates jobs, prevents duplicates via `ActiveJobId` lock, passes retry context
-- **JobStatusChangedConsumer** — updates job state, clears the automation lock on terminal status, schedules retries via outbox when `RetryAttempt < MaxRetries`
+- **AutomationTriggeredConsumer** — creates jobs, prevents duplicates via `ActiveJobId` lock, passes retry context and `TaskConfig` snapshot
+- **JobStatusChangedConsumer** — updates job state, persists `OutputJson` on completion, clears the automation lock on terminal status, schedules retries via outbox when `RetryAttempt < MaxRetries`
 - **OutboxRelayWorker** — polls `OutboxMessages` every `OutboxRelayOptions.PollIntervalMs` ms and publishes to Redis Streams
 
 Also hosts `DlqController` for operator inspection, replay, and deletion of dead-letter entries.
-
+Exposes task type discovery at `GET /api/task-types`.
 Exposes health probes at `/health/live` and `/health/ready`.
 
 ### JobAutomator (`FlowForge.JobAutomator`)
-Evaluates trigger conditions for all enabled automations using an in-memory cache. When the condition tree evaluates to `true` it publishes `AutomationTriggeredEvent`. Uses Quartz.NET (clustered, PostgreSQL-backed) for schedule-based triggers. Evaluation runs every `AutomationWorkerOptions.EvaluationIntervalSeconds` seconds.
+Evaluates trigger conditions for all enabled automations using an in-memory cache. When the condition tree evaluates to `true` it publishes `AutomationTriggeredEvent` (including the automation's `TaskConfig`). Uses Quartz.NET (clustered, PostgreSQL-backed) for schedule-based triggers. Evaluation runs every `AutomationWorkerOptions.EvaluationIntervalSeconds` seconds.
 
 Exposes health probes at `/health/live` and `/health/ready`.
 
 ### JobOrchestrator (`FlowForge.JobOrchestrator`)
-Consumes `JobCreatedEvent`, selects an online host via round-robin load balancing, transitions the job to `Started`, and publishes `JobAssignedEvent` to the host-specific Redis Stream. Also monitors host heartbeats every `HeartbeatMonitorOptions.CheckIntervalSeconds` seconds and marks unresponsive hosts offline.
+Consumes `JobCreatedEvent`, selects an online host via round-robin load balancing, transitions the job to `Started`, and publishes `JobAssignedEvent` to `flowforge:host:{hostName}`. Also monitors host heartbeats every `HeartbeatMonitorOptions.CheckIntervalSeconds` seconds and marks unresponsive hosts offline. A `PendingJobScannerWorker` periodically re-queues jobs stuck in `Pending` (stale after `PendingJobScannerOptions.StaleAfterSeconds`) so they are dispatched once hosts come back online.
 
 Exposes health probes at `/health/live` and `/health/ready`.
 
 ### WorkflowHost (`FlowForge.WorkflowHost`)
-Runs as a Kubernetes DaemonSet (one replica per node). Consumes the host-specific `JobAssignedEvent` stream and spawns one `WorkflowEngine` process per job via fire-and-forget. Maintains a Redis heartbeat key so JobOrchestrator knows the host is alive. Configurable heartbeat interval via `HostHeartbeatOptions`.
+Runs as a Kubernetes DaemonSet (one replica per node). Consumes the host-specific `JobAssignedEvent` stream and spawns one `WorkflowEngine` process per job via fire-and-forget. Maintains a Redis heartbeat key so JobOrchestrator knows the host is alive. Configurable heartbeat interval via `HostHeartbeatOptions`. `NativeProcessManager` detects whether the engine path is a `.dll` and launches it via `dotnet <dll>` accordingly.
 
 Exposes health probes at `/health/live` and `/health/ready`.
 
 ### WorkflowEngine (`FlowForge.WorkflowEngine`)
-Short-lived console application spawned by WorkflowHost. Receives `JOB_ID`, `JOB_AUTOMATION_ID`, and `CONNECTION_ID` via environment variables. Resolves the job's `TaskId` to a registered `IWorkflowHandler`, executes it, and publishes the final `JobStatusChangedEvent`. Enforces optional per-job timeouts via a linked `CancellationTokenSource`. Records `flowforge.jobs.duration_seconds` on completion.
+Short-lived console application spawned by WorkflowHost. Receives `JOB_ID`, `JOB_AUTOMATION_ID`, and `CONNECTION_ID` via environment variables. Deserializes `job.TaskConfig` into `WorkflowContext.Parameters` so handlers receive their per-automation configuration. Resolves the job's `TaskId` to a registered `IWorkflowHandler`, executes it, serializes `context.Outputs` into `OutputJson`, and publishes the final `JobStatusChangedEvent` (with `OutputJson`). Enforces optional per-job timeouts via a linked `CancellationTokenSource`. Records `flowforge.jobs.duration_seconds` on completion.
 
 ---
 
@@ -75,6 +75,7 @@ Short-lived console application spawned by WorkflowHost. Receives `JOB_ID`, `JOB
 ### Automation
 The primary configuration unit. Specifies:
 - **TaskId** — which workflow handler to execute (e.g. `"send-email"`, `"http-request"`)
+- **TaskConfig** — JSON blob of handler parameters (e.g. `{"to":"...", "subject":"..."}`) snapshotted onto each Job at creation
 - **HostGroupId** — which pool of hosts may run jobs for this automation
 - **Triggers** — one or more named conditions
 - **ConditionRoot** — AND/OR tree combining trigger names
@@ -92,17 +93,17 @@ A recursive AND/OR tree stored as `ConditionRoot` on the Automation. The evaluat
 Created when an automation fires. Carries:
 - **Status** — state machine: `Pending → Started → InProgress → Completed / Error / CompletedUnsuccessfully / Cancelled`
 - **TaskId** — what the engine should execute
-- **TimeoutSeconds** — enforced by WorkflowEngine's timeout CTS (copied from Automation at job creation time)
+- **TaskConfig** — snapshot of handler parameters at creation time (immutable after creation)
+- **OutputJson** — serialized `context.Outputs` written back by the engine on completion (jsonb, nullable)
+- **TimeoutSeconds** — enforced by WorkflowEngine's timeout CTS (copied from Automation at job creation)
 - **RetryAttempt** — which attempt this is (0 = first)
-- **MaxRetries** — upper bound on retries (copied from Automation at job creation time)
+- **MaxRetries** — upper bound on retries (copied from Automation at job creation)
 
 ### Host Group
 A logical pool of WorkflowHost instances sharing a job database. Each host group has a `ConnectionId` that maps to a named connection string in `JobConnections` configuration.
 
 ### TaskId
-A string identifier (`"send-email"`, `"http-request"`, `"run-script"`) that maps to an `IWorkflowHandler` registered in WorkflowEngine. The handler performs the actual work.
-
-> **Note:** Currently `WorkflowContext.Parameters` is always an empty dictionary, so handlers cannot receive per-automation configuration. This is ROADMAP item #1.
+A string identifier (`"send-email"`, `"http-request"`, `"run-script"`) that maps to an `IWorkflowHandler` registered in WorkflowEngine and an `ITaskTypeDescriptor` registered in Infrastructure (discoverable via `GET /api/task-types`).
 
 ---
 
@@ -114,11 +115,13 @@ All inter-service communication uses **Redis Streams** with consumer groups.
 |---|---|---|
 | `flowforge:automation-triggered` | JobAutomator / WebApi (retry outbox) | WebApi `AutomationTriggeredConsumer` |
 | `flowforge:automation-changed` | WebApi (outbox) | JobAutomator `AutomationCacheSyncWorker` |
-| `flowforge:job-created` | WebApi (outbox) | JobOrchestrator `JobDispatcherWorker` |
-| `flowforge:host:{hostId}` | JobOrchestrator | WorkflowHost `JobConsumerWorker` |
+| `flowforge:job-created` | WebApi (outbox) | JobOrchestrator `JobDispatcherWorker`, `PendingJobScannerWorker` (re-queues) |
+| `flowforge:host:{hostName}` | JobOrchestrator | WorkflowHost `JobConsumerWorker` |
 | `flowforge:job-status-changed` | WorkflowEngine | WebApi `JobStatusChangedConsumer`, JobAutomator `JobCompletedFlagWorker` |
 | `flowforge:job-cancel-requested` | WebApi | WorkflowHost `CancelConsumerWorker` |
 | `flowforge:dlq` | All consumers (on error) | `DlqController` (operator) |
+
+The host stream key uses the host's **name** (matching `NODE_NAME` env var), not its database GUID.
 
 The **Transactional Outbox** pattern is used for all writes that must be atomic with a database mutation. `IOutboxWriter` appends to `OutboxMessages` in the same `SaveChangesAsync` call; `OutboxRelayWorker` polls and publishes to Redis.
 
@@ -133,6 +136,7 @@ The **Transactional Outbox** pattern is used for all writes that must be atomic 
 | Job Timeout | ✅ | WorkflowEngine creates a linked CTS from `job.TimeoutSeconds` |
 | Duplicate Job Prevention | ✅ | `automation.ActiveJobId` set on creation; checked before creating a new job |
 | Heartbeat Monitoring | ✅ | WorkflowHost publishes Redis key with TTL; JobOrchestrator marks offline on expiry |
+| No-Host Re-queuing | ✅ | `PendingJobScannerWorker` re-publishes stale `Pending` jobs every 30 s |
 | Health Probes | ✅ | All services: `/health/live` (liveness) and `/health/ready` (readiness) |
 | Configurable Intervals | ✅ | `IOptions<T>` options classes per worker; defaults in `appsettings.json` |
 
@@ -157,9 +161,9 @@ The **Transactional Outbox** pattern is used for all writes that must be atomic 
 FlowForge.sln
 ├── src/
 │   ├── shared/
-│   │   ├── FlowForge.Domain          # Entities, aggregates, repositories, exceptions
+│   │   ├── FlowForge.Domain          # Entities, aggregates, repositories, exceptions, task type interfaces
 │   │   ├── FlowForge.Contracts       # Event records (shared across services)
-│   │   └── FlowForge.Infrastructure  # EF Core, Redis, Telemetry, Messaging, DLQ
+│   │   └── FlowForge.Infrastructure  # EF Core, Redis, Telemetry, Messaging, DLQ, task/trigger type registries
 │   └── services/
 │       ├── FlowForge.WebApi
 │       ├── FlowForge.JobAutomator
@@ -179,30 +183,32 @@ FlowForge.sln
 **Prerequisites:** Docker Desktop, .NET 10 SDK
 
 ```bash
-# Start infrastructure (PostgreSQL ×4, Redis, Jaeger)
+# Start full stack (infrastructure + all application services)
 docker compose -f deploy/docker/compose.yaml up -d
 
-# Restore and build
-dotnet restore FlowForge.sln && dotnet build FlowForge.sln
+# Or run services locally — start infrastructure first
+docker compose -f deploy/docker/compose.yaml up -d \
+  postgres-platform postgres-minion postgres-titan postgres-quartz redis jaeger
 
-# Apply platform DB migration (job DBs auto-migrate on WebApi startup)
+# Apply platform DB migration
 dotnet ef database update \
   --project src/shared/FlowForge.Infrastructure \
   --startup-project src/services/FlowForge.WebApi \
   --context PlatformDbContext
 
+# Apply job DB migrations (minion and titan)
+dotnet ef database update \
+  --project src/shared/FlowForge.Infrastructure \
+  --startup-project src/services/FlowForge.WebApi \
+  --context JobsDbContext \
+  --connection "Host=localhost;Port=5433;Database=flowforge_minion;Username=postgres;Password=postgres"
+
+dotnet ef database update \
+  --project src/shared/FlowForge.Infrastructure \
+  --startup-project src/services/FlowForge.WebApi \
+  --context JobsDbContext \
+  --connection "Host=localhost;Port=5434;Database=flowforge_titan;Username=postgres;Password=postgres"
+
 # Run tests
 dotnet test FlowForge.sln
 ```
-
-Start each service with `dotnet run` from its project directory, or use your IDE.
-
----
-
-## Known Limitations
-
-| Limitation | Roadmap |
-|---|---|
-| `WorkflowContext.Parameters` is always an empty dictionary — handlers cannot receive per-automation config | Item #1 |
-| JobDispatcherWorker silently drops jobs when no hosts are online | Item #4 |
-| Application services are not containerised — only infrastructure runs in Docker | Item #2 |

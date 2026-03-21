@@ -199,7 +199,7 @@ All services call `builder.Services.AddFlowForgeTelemetry(config, "ServiceName")
 
 ### Configuration
 - All configuration is read via `IConfiguration` or `IOptions<T>`.
-- The only exception is WorkflowEngine, which reads `JOB_ID`, `JOB_AUTOMATION_ID`, and `CONNECTION_ID` from environment variables at process entry — these are set by WorkflowHost when spawning the process.
+- The only exception is WorkflowEngine, which reads `JOB_ID`, `JOB_AUTOMATION_ID`, and `CONNECTION_ID` from environment variables at process entry — these are set by `NativeProcessManager` when spawning the child process. All other config (Redis, database connections, SMTP) is inherited from the parent's environment.
 - Throw `InvalidOperationException` at startup for missing required config, not at first use.
 
 ---

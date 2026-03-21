@@ -78,11 +78,13 @@ public interface IProcessManager
 ```
 
 ### NativeProcessManager
-Spawns `FlowForge.WorkflowEngine` as a child process. Environment variables set on the child:
+Spawns `FlowForge.WorkflowEngine` as a child process. Detects whether `WorkflowHost:EnginePath` ends in `.dll` and launches via `dotnet <dll>` accordingly (required in the Docker container where the engine is published as a managed assembly).
+
+Environment variables set on the child:
 - `JOB_ID` = `jobId.ToString()`
 - `JOB_AUTOMATION_ID` = `automationId.ToString()`
 - `CONNECTION_ID` = `connectionId`
-- All environment variables from the parent process (includes connection strings, Redis config, etc.)
+- All environment variables from the parent process (includes connection strings, Redis config, SMTP credentials, etc.)
 
 Awaits process exit. If the `CancellationToken` fires, sends `SIGTERM` to the process and awaits graceful exit.
 
@@ -95,12 +97,10 @@ Runs `WorkflowEngine` inside a Docker container via `docker run`. Used when Work
 
 Consumes `JobCancelRequestedEvent` from `flowforge:job-cancel-requested` (consumer group `"workflow-host"`).
 
-```csharp
-var jobConsumer = hostedServices
-    .OfType<JobConsumerWorker>()
-    .Single();
+`JobConsumerWorker` is registered as an explicit singleton (`AddSingleton<JobConsumerWorker>()`) so `CancelConsumerWorker` can inject it directly without a circular dependency via `IEnumerable<IHostedService>`.
 
-if (@event.HostId == Guid.Empty || @event.HostId == _hostIdGuid)
+```csharp
+if (@event.HostId.ToString() == _hostId || @event.HostId == Guid.Empty)
     jobConsumer.TryCancel(@event.JobId);
 ```
 
@@ -137,8 +137,11 @@ GET /health/ready  → checks PostgreSQL (job DB) + Redis
   "HostHeartbeat": {
     "PublishIntervalSeconds": 10
   },
+  "WorkflowHost": {
+    "EnginePath": "/app/engine/FlowForge.WorkflowEngine.dll"
+  },
   "ConnectionStrings": {
-    "DefaultConnection": "Host=localhost;Port=5433;Database=flowforge_minion;Username=postgres;Password=postgres"
+    "DefaultConnection": "Host=localhost;Database=flowforge_platform;Username=postgres;Password=postgres"
   },
   "JobConnections": {
     "wf-jobs-minion": {
@@ -151,6 +154,8 @@ GET /health/ready  → checks PostgreSQL (job DB) + Redis
 }
 ```
 
+`WorkflowHost:EnginePath` points to the engine binary. When the path ends in `.dll`, `NativeProcessManager` launches it via `dotnet <dll>` (Linux container). When running locally on Windows, it can point to a `.exe` or an absolute `.dll` path.
+
 ---
 
 ## DI Registration (Program.cs)
@@ -162,7 +167,9 @@ builder.Services.AddSingleton<IProcessManager, NativeProcessManager>();
 builder.Services.Configure<HostHeartbeatOptions>(
     builder.Configuration.GetSection(HostHeartbeatOptions.SectionName));
 
-builder.Services.AddHostedService<JobConsumerWorker>();
+// JobConsumerWorker registered as singleton so CancelConsumerWorker can inject it directly
+builder.Services.AddSingleton<JobConsumerWorker>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<JobConsumerWorker>());
 builder.Services.AddHostedService<CancelConsumerWorker>();
 builder.Services.AddHostedService<HostHeartbeatWorker>();
 ```

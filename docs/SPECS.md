@@ -11,7 +11,7 @@
 | Real-time Push | SignalR |
 | Scheduler | Quartz.NET 3.x (clustered, PostgreSQL store) |
 | Observability | OpenTelemetry (tracing + metrics), Jaeger |
-| Containerisation | Docker Compose (infrastructure only; application services — see ROADMAP #2) |
+| Containerisation | Docker Compose (full stack: infrastructure + all application services) |
 | Testing | xUnit, FluentAssertions, NSubstitute, Testcontainers |
 
 ---
@@ -32,17 +32,27 @@ FlowForge.sln
 │   │   │   │   ├── WorkflowHost.cs
 │   │   │   │   └── OutboxMessage.cs
 │   │   │   ├── Enums/
-│   │   │   │   └── JobStatus.cs
+│   │   │   │   ├── JobStatus.cs
+│   │   │   │   └── ConfigFieldType.cs
 │   │   │   ├── Exceptions/
 │   │   │   │   ├── DomainException.cs
 │   │   │   │   ├── AutomationNotFoundException.cs
 │   │   │   │   ├── InvalidAutomationException.cs
 │   │   │   │   └── InvalidJobTransitionException.cs
-│   │   │   └── Repositories/
-│   │   │       ├── IAutomationRepository.cs
-│   │   │       ├── IJobRepository.cs
-│   │   │       ├── IHostGroupRepository.cs
-│   │   │       └── IWorkflowHostRepository.cs
+│   │   │   ├── Repositories/
+│   │   │   │   ├── IAutomationRepository.cs
+│   │   │   │   ├── IJobRepository.cs
+│   │   │   │   ├── IHostGroupRepository.cs
+│   │   │   │   └── IWorkflowHostRepository.cs
+│   │   │   ├── Tasks/
+│   │   │   │   ├── ITaskTypeDescriptor.cs
+│   │   │   │   ├── TaskParameterField.cs
+│   │   │   │   └── ITaskTypeRegistry.cs
+│   │   │   └── Triggers/
+│   │   │       ├── ITriggerTypeDescriptor.cs
+│   │   │       ├── ITriggerTypeRegistry.cs
+│   │   │       ├── TriggerConfigSchema.cs
+│   │   │       └── TriggerTypes.cs
 │   │   │
 │   │   ├── FlowForge.Contracts/
 │   │   │   └── Events/
@@ -81,6 +91,15 @@ FlowForge.sln
 │   │       │       ├── JobsDbContext.cs
 │   │       │       ├── Configurations/
 │   │       │       └── Migrations/
+│   │       ├── Tasks/
+│   │       │   ├── TaskTypeRegistry.cs
+│   │       │   └── Descriptors/
+│   │       │       ├── SendEmailTaskDescriptor.cs
+│   │       │       ├── HttpRequestTaskDescriptor.cs
+│   │       │       └── RunScriptTaskDescriptor.cs
+│   │       ├── Triggers/
+│   │       │   ├── TriggerTypeRegistry.cs
+│   │       │   └── Descriptors/        ← 5 built-in trigger descriptors
 │   │       └── Telemetry/
 │   │           ├── TelemetryExtensions.cs
 │   │           ├── FlowForgeActivitySources.cs
@@ -92,6 +111,7 @@ FlowForge.sln
 │       │   │   ├── AutomationsController.cs
 │       │   │   ├── JobsController.cs
 │       │   │   ├── TriggersController.cs
+│       │   │   ├── TaskTypesController.cs
 │       │   │   ├── HostGroupsController.cs
 │       │   │   └── DlqController.cs
 │       │   ├── DTOs/Requests/ & DTOs/Responses/
@@ -121,10 +141,13 @@ FlowForge.sln
 │       │   ├── LoadBalancing/
 │       │   │   ├── ILoadBalancer.cs
 │       │   │   └── RoundRobinLoadBalancer.cs
-│       │   ├── Options/HeartbeatMonitorOptions.cs
+│       │   ├── Options/
+│       │   │   ├── HeartbeatMonitorOptions.cs
+│       │   │   └── PendingJobScannerOptions.cs
 │       │   └── Workers/
 │       │       ├── JobDispatcherWorker.cs
-│       │       └── HeartbeatMonitorWorker.cs
+│       │       ├── HeartbeatMonitorWorker.cs
+│       │       └── PendingJobScannerWorker.cs
 │       │
 │       ├── FlowForge.WorkflowHost/
 │       │   ├── Options/HostHeartbeatOptions.cs
@@ -145,6 +168,8 @@ FlowForge.sln
 │           │   ├── SendEmailHandler.cs
 │           │   ├── HttpRequestHandler.cs
 │           │   └── RunScriptHandler.cs
+│           ├── Options/
+│           │   └── SmtpOptions.cs
 │           ├── Reporting/
 │           │   └── JobProgressReporter.cs
 │           └── Program.cs
@@ -165,7 +190,7 @@ FlowForge.sln
 │
 └── deploy/
     └── docker/
-        ├── compose.yaml              ← infrastructure only (postgres ×4, redis, jaeger)
+        ├── compose.yaml              ← full stack (postgres ×4, redis, jaeger + all 5 app services)
         └── quartz-postgresql.sql
 ```
 
@@ -179,11 +204,12 @@ Id             : Guid
 Name           : string (max 200)
 Description    : string?
 TaskId         : string
+TaskConfig     : string? (jsonb)   ← flat JSON handler parameters; snapshotted onto Job at creation
 HostGroupId    : Guid
 IsEnabled      : bool
-ActiveJobId    : Guid?          ← set when a job is running; null when idle
-TimeoutSeconds : int?           ← null = no timeout
-MaxRetries     : int            ← 0 = no retry (default)
+ActiveJobId    : Guid?             ← set when a job is running; null when idle
+TimeoutSeconds : int?              ← null = no timeout
+MaxRetries     : int               ← 0 = no retry (default)
 ConditionRoot  : string (jsonb)
 Triggers       : IList<Trigger>
 CreatedAt      : DateTimeOffset
@@ -211,10 +237,12 @@ HostGroupId    : Guid
 HostId         : Guid?
 Status         : JobStatus
 Message        : string? (max 1000)
+TaskConfig     : string? (jsonb)   ← snapshot of Automation.TaskConfig at creation; immutable
+OutputJson     : string? (jsonb)   ← serialized context.Outputs written by WorkflowEngine on completion
 TriggeredAt    : DateTimeOffset?
-TimeoutSeconds : int?           ← copied from Automation at job creation
-RetryAttempt   : int            ← 0 = first attempt
-MaxRetries     : int            ← copied from Automation at job creation
+TimeoutSeconds : int?              ← copied from Automation at job creation
+RetryAttempt   : int               ← 0 = first attempt
+MaxRetries     : int               ← copied from Automation at job creation
 CreatedAt      : DateTimeOffset
 UpdatedAt      : DateTimeOffset
 ```
@@ -222,10 +250,10 @@ UpdatedAt      : DateTimeOffset
 ### TriggerConditionNode (stored as jsonb in Automation.ConditionRoot)
 ```json
 // Leaf:
-{ "type": "trigger", "name": "daily-schedule" }
+{ "operator": null, "triggerName": "daily-schedule", "nodes": null }
 
 // Composite:
-{ "type": "and"|"or", "children": [ ...nodes ] }
+{ "operator": "And"|"Or", "triggerName": null, "nodes": [ ...nodes ] }
 ```
 
 ### JobStatus Lifecycle
@@ -235,7 +263,7 @@ Pending → Started → InProgress → Completed
                               ↘ CompletedUnsuccessfully
                               ↘ Cancelled
 ```
-Terminal statuses: `Completed`, `Error`, `CompletedUnsuccessfully`, `Cancelled`.
+Terminal statuses: `Completed`, `Error`, `CompletedUnsuccessfully`, `Cancelled`, `Removed`.
 
 ---
 
@@ -269,7 +297,8 @@ public static class TriggerTypes
 record AutomationTriggeredEvent(
     Guid AutomationId, Guid HostGroupId, string ConnectionId, string TaskId,
     DateTimeOffset TriggeredAt,
-    int? TimeoutSeconds = null, int MaxRetries = 0, int RetryAttempt = 0);
+    int? TimeoutSeconds = null, int MaxRetries = 0, int RetryAttempt = 0,
+    string? TaskConfig = null);
 
 record AutomationChangedEvent(
     Guid AutomationId, ChangeType ChangeType, AutomationSnapshot? Snapshot);
@@ -277,7 +306,7 @@ record AutomationChangedEvent(
 record AutomationSnapshot(
     Guid Id, string Name, bool IsEnabled, Guid HostGroupId, string ConnectionId,
     string TaskId, IReadOnlyList<TriggerSnapshot> Triggers, TriggerConditionNode ConditionRoot,
-    int? TimeoutSeconds = null, int MaxRetries = 0);
+    int? TimeoutSeconds = null, int MaxRetries = 0, string? TaskConfig = null);
 
 record JobCreatedEvent(
     Guid JobId, string ConnectionId, Guid AutomationId, Guid HostGroupId,
@@ -288,10 +317,34 @@ record JobAssignedEvent(
 
 record JobStatusChangedEvent(
     Guid JobId, Guid AutomationId, string ConnectionId, JobStatus Status,
-    string? Message, DateTimeOffset UpdatedAt);
+    string? Message, DateTimeOffset UpdatedAt, string? OutputJson = null);
 
 record JobCancelRequestedEvent(Guid JobId, Guid HostId, DateTimeOffset RequestedAt);
 ```
+
+---
+
+## Task Type Discovery
+
+Task types are self-describing via `ITaskTypeDescriptor` (in `FlowForge.Domain/Tasks/`). The registry is built in Infrastructure and registered by `AddInfrastructure()`.
+
+```csharp
+public interface ITaskTypeDescriptor
+{
+    string TaskId { get; }
+    string DisplayName { get; }
+    string? Description { get; }
+    IReadOnlyList<TaskParameterField> Parameters { get; }
+}
+
+public record TaskParameterField(
+    string Name, string Label, string Type,  // "text", "textarea", "number", "boolean"
+    bool Required, string? DefaultValue = null, string? HelpText = null);
+```
+
+Built-in descriptors: `SendEmailTaskDescriptor`, `HttpRequestTaskDescriptor`, `RunScriptTaskDescriptor`.
+
+Endpoint: `GET /api/task-types` · `GET /api/task-types/{taskId}`
 
 ---
 
@@ -324,14 +377,21 @@ Job DBs are registered as keyed `IJobRepository` services using the `ConnectionI
 
 ---
 
-## Infrastructure Docker Compose
+## Docker Compose
 
-`deploy/docker/compose.yaml` runs:
-- `flowforge-db-platform` — PostgreSQL 16 on port 5432
-- `flowforge-db-minion` — PostgreSQL 16 on port 5433
-- `flowforge-db-titan` — PostgreSQL 16 on port 5434
-- `flowforge-db-quartz` — PostgreSQL 16 on port 5435 (initialised with `quartz-postgresql.sql`)
+`deploy/docker/compose.yaml` runs the full stack:
+
+**Infrastructure:**
+- `flowforge-db-platform` — PostgreSQL 17 on port 5432
+- `flowforge-db-minion` — PostgreSQL 17 on port 5433
+- `flowforge-db-titan` — PostgreSQL 17 on port 5434
+- `flowforge-db-quartz` — PostgreSQL 17 on port 5435 (initialised with `quartz-postgresql.sql`)
 - `flowforge-redis` — Redis 7 with AOF persistence on port 6379
 - `flowforge-jaeger` — Jaeger all-in-one on ports 16686 (UI) and 4317 (OTLP gRPC)
 
-Application services are not yet containerised — see ROADMAP item #2.
+**Application services:**
+- `flowforge-webapi` — port 8080, depends on platform DB + both job DBs + Redis
+- `flowforge-job-automator` — port 8081, depends on WebApi healthy
+- `flowforge-job-orchestrator` — port 8092, depends on platform DB + both job DBs + Redis
+- `flowforge-workflowhost-minion` — port 8083, `NODE_NAME=minion`
+- `flowforge-workflowhost-titan` — port 8084, `NODE_NAME=titan`

@@ -29,7 +29,10 @@ Start heartbeat loop (every 5 s → redis.SetAsync "heartbeat:{jobId}")
 ReportStatus → InProgress
           │
           ▼
-Build WorkflowContext { JobId, TaskId, ConnectionId, Parameters = {} }
+Deserialize job.TaskConfig → WorkflowContext.Parameters
+          │
+          ▼
+Build WorkflowContext { JobId, TaskId, ConnectionId, Parameters }
           │
           ▼
 WorkflowHandlerRegistry.Get(job.TaskId) → IWorkflowHandler
@@ -42,8 +45,9 @@ handler.ExecuteAsync(context, cts.Token)
    Normal exit                       OperationCanceledException
      │                                          │
    Record JobDurationSeconds          timeout? → Error "timed out"
-   Map WorkflowResult → JobStatus    otherwise → Cancelled
-   ReportStatus(finalStatus)         ReportStatus(Error|Cancelled)
+   Serialize context.Outputs          otherwise → Cancelled
+   Map WorkflowResult → JobStatus    ReportStatus(Error|Cancelled)
+   ReportStatus(finalStatus, outputJson)
      │
    Exit 0 / 1
 ```
@@ -58,7 +62,7 @@ handler.ExecuteAsync(context, cts.Token)
 | `JOB_AUTOMATION_ID` | `Guid` of the owning automation (for status reporting) |
 | `CONNECTION_ID` | Key into `JobConnections` config to load the correct job DB |
 
-All other configuration (Redis, PostgreSQL connections, OTLP endpoint) is inherited from the parent WorkflowHost process environment.
+All other configuration (Redis, PostgreSQL connections, OTLP endpoint, SMTP credentials) is inherited from the parent WorkflowHost process environment.
 
 ---
 
@@ -111,14 +115,14 @@ public sealed class WorkflowContext
     public Guid JobId { get; init; }
     public string TaskId { get; init; }
     public string ConnectionId { get; init; }
-    public IReadOnlyDictionary<string, JsonElement> Parameters { get; init; }
-    public Dictionary<string, object> Outputs { get; }   // handler can store outputs here
+    public Dictionary<string, JsonElement> Parameters { get; init; }  // from job.TaskConfig
+    public Dictionary<string, object> Outputs { get; }                // handler stores results here
 
     public T GetParameter<T>(string key);   // throws KeyNotFoundException if missing
 }
 ```
 
-> **⚠️ Known Issue:** `Parameters` is currently always an **empty dictionary**. Handlers that call `context.GetParameter<T>(key)` will throw `KeyNotFoundException` at runtime. This is ROADMAP item #1 — Task Parameters Propagation. Until implemented, `SendEmailHandler`, `HttpRequestHandler`, and `RunScriptHandler` all fail immediately when invoked.
+`Parameters` is populated by deserializing `job.TaskConfig` (a JSON object stored on the job). If `TaskConfig` is null, `Parameters` is an empty dictionary.
 
 ---
 
@@ -127,10 +131,10 @@ public sealed class WorkflowContext
 ```csharp
 public record WorkflowResult(WorkflowResultStatus Status, string? Message = null)
 {
-    public static WorkflowResult Success()            => new(WorkflowResultStatus.Completed);
-    public static WorkflowResult Failure(string msg)  => new(WorkflowResultStatus.Failed, msg);
-    public static WorkflowResult Cancellation()       => new(WorkflowResultStatus.Cancelled);
-    public static WorkflowResult Fault(string msg)    => new(WorkflowResultStatus.Error, msg);
+    public static WorkflowResult Success(string? message = null) => new(WorkflowResultStatus.Completed, message);
+    public static WorkflowResult Failure(string msg)             => new(WorkflowResultStatus.Failed, msg);
+    public static WorkflowResult Cancellation()                  => new(WorkflowResultStatus.Cancelled);
+    public static WorkflowResult Fault(string msg)               => new(WorkflowResultStatus.Error, msg);
 }
 ```
 
@@ -150,31 +154,44 @@ public record WorkflowResult(WorkflowResultStatus Status, string? Message = null
 ## Built-in Handlers
 
 ### SendEmailHandler (`"send-email"`)
-Expected parameters (from `WorkflowContext.Parameters`):
-- `"to"` — recipient address
-- `"subject"` — email subject line
-- `"body"` — email body
+Sends email via SMTP using `System.Net.Mail.SmtpClient`. Reads credentials from `SmtpOptions`.
 
-**Current state:** stub only — simulates a 1-second delay and returns success. No real SMTP. See ROADMAP item #3.
+Parameters (from `WorkflowContext.Parameters`):
+- `"to"` — recipient address (required)
+- `"subject"` — email subject line (required)
+- `"body"` — email body, plain text (required)
+- `"from"` — override sender address (optional; falls back to `SmtpOptions.DefaultFromAddress`)
 
 ### HttpRequestHandler (`"http-request"`)
-Expected parameters:
-- `"url"` — target URL
-- `"method"` — HTTP method (default: `"GET"`)
+Parameters:
+- `"url"` — target URL (required)
+- `"method"` — HTTP method (optional, default: `"GET"`)
 
 Makes the HTTP request via `IHttpClientFactory`. Returns `Failure` on non-2xx response. Stores response body in `context.Outputs["responseBody"]`.
 
-**Current state:** functional but `Parameters` is always empty (see above).
-
 ### RunScriptHandler (`"run-script"`)
-Expected parameters:
-- `"interpreter"` — executable path (default: `"cmd.exe"`)
-- `"scriptPath"` — path to the script file
+Parameters:
+- `"interpreter"` — executable path (required, e.g. `"python"`, `"bash"`)
+- `"scriptPath"` — path to the script file (required)
 - `"arguments"` — optional arguments string
 
 Spawns a child process, awaits exit. Returns `Failure` with stderr output on non-zero exit code.
 
-**Current state:** functional but `Parameters` is always empty (see above).
+---
+
+## Structured Outputs
+
+After `handler.ExecuteAsync` returns, the engine serializes `context.Outputs` and passes it to the final `ReportStatusAsync` call:
+
+```csharp
+var outputJson = context.Outputs.Count > 0
+    ? JsonSerializer.Serialize(context.Outputs)
+    : null;
+
+await reporter.ReportStatusAsync(jobId, automationId, connectionId, finalStatus, result.Message, outputJson, CancellationToken.None);
+```
+
+`outputJson` is included in `JobStatusChangedEvent` and persisted to `Job.OutputJson` (jsonb) by `JobStatusChangedConsumer`. Clients can read it from `GET /api/jobs/{id}` → `JobResponse.OutputJson`.
 
 ---
 
@@ -184,16 +201,36 @@ Spawns a child process, awaits exit. Returns `Failure` with stderr output on non
 public interface IJobReporter
 {
     Task ReportStatusAsync(Guid jobId, Guid automationId, string connectionId,
-                           JobStatus status, string? message = null, CancellationToken ct = default);
+                           JobStatus status, string? message = null,
+                           string? outputJson = null, CancellationToken ct = default);
     Task RefreshHeartbeatAsync(Guid jobId, CancellationToken ct = default);
 }
 ```
 
 `JobProgressReporter` implementation:
-- `ReportStatusAsync` → publishes `JobStatusChangedEvent` to Redis via `IMessagePublisher`
+- `ReportStatusAsync` → publishes `JobStatusChangedEvent` (including `OutputJson`) to Redis via `IMessagePublisher`
 - `RefreshHeartbeatAsync` → `redis.SetAsync($"heartbeat:{jobId}", "alive", TimeSpan.FromSeconds(30))`
 
 The heartbeat is refreshed every 5 seconds in a background `Task.Run` loop that runs for the lifetime of the job.
+
+---
+
+## SmtpOptions
+
+```csharp
+public class SmtpOptions
+{
+    public const string SectionName = "Smtp";
+    public string Host { get; init; } = "sandbox.smtp.mailtrap.io";
+    public int Port { get; init; } = 2525;
+    public string Username { get; init; } = string.Empty;
+    public string Password { get; init; } = string.Empty;
+    public bool EnableSsl { get; init; } = true;
+    public string DefaultFromAddress { get; init; } = "noreply@flowforge.io";
+}
+```
+
+All SMTP settings are read from configuration (environment variables in Docker). No code change is needed to switch SMTP providers — only configuration.
 
 ---
 
@@ -217,8 +254,10 @@ FlowForgeMetrics.JobDurationSeconds.Record(
 
 1. Create `MyHandler : IWorkflowHandler` in `FlowForge.WorkflowEngine/Handlers/`
 2. Set `TaskId` to a unique string (e.g. `"my-task"`)
-3. Read parameters via `context.GetParameter<T>(key)` (works once ROADMAP #1 is implemented)
-4. Register in `Program.cs`: `builder.Services.AddScoped<IWorkflowHandler, MyHandler>()`
+3. Read parameters via `context.GetParameter<T>(key)`
+4. Optionally write results to `context.Outputs["myKey"] = value`
+5. Register in `Program.cs`: `builder.Services.AddScoped<IWorkflowHandler, MyHandler>()`
+6. Add a corresponding `ITaskTypeDescriptor` in `FlowForge.Infrastructure/Tasks/Descriptors/` and register it in `ServiceCollectionExtensions.AddTaskTypeRegistry()` so it appears in `GET /api/task-types`
 
 ---
 
@@ -228,9 +267,12 @@ FlowForgeMetrics.JobDurationSeconds.Record(
 builder.Services.AddInfrastructure(builder.Configuration, "WorkflowEngine");
 builder.Services.AddHttpClient();
 
+builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection(SmtpOptions.SectionName));
+
 builder.Services.AddSingleton<WorkflowHandlerRegistry>();
 builder.Services.AddScoped<IWorkflowHandler, SendEmailHandler>();
 builder.Services.AddScoped<IWorkflowHandler, HttpRequestHandler>();
 builder.Services.AddScoped<IWorkflowHandler, RunScriptHandler>();
+
 builder.Services.AddScoped<IJobReporter, JobProgressReporter>();
 ```

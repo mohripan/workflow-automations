@@ -26,19 +26,25 @@ public interface ITriggerTypeDescriptor
 {
     string TypeId { get; }
     string DisplayName { get; }
-    string Description { get; }
-    TriggerConfigSchema ConfigSchema { get; }
+    string? Description { get; }
+    TriggerConfigSchema GetSchema();
+    IReadOnlyList<string> ValidateConfig(string configJson);
 }
 
-public record TriggerConfigSchema(IReadOnlyList<ConfigField> Fields);
+public record TriggerConfigSchema(
+    string TypeId,
+    string DisplayName,
+    string? Description,
+    IReadOnlyList<ConfigField> Fields);
 
 public record ConfigField(
     string Name,
     string Label,
-    string Type,           // "text", "number", "textarea", "select", "boolean"
+    ConfigFieldType DataType,      // enum: String, Int, Bool, CronExpression, MultilineString, Script, Enum, …
     bool Required,
-    string? DefaultValue = null,
-    string? HelpText = null);
+    string? Description,
+    string? DefaultValue,
+    IReadOnlyList<string>? EnumValues);
 ```
 
 ---
@@ -48,12 +54,14 @@ public record ConfigField(
 ```csharp
 public interface ITriggerTypeRegistry
 {
+    void Register(ITriggerTypeDescriptor descriptor);
     IReadOnlyList<ITriggerTypeDescriptor> GetAll();
     ITriggerTypeDescriptor? Get(string typeId);
+    bool IsKnown(string typeId);
 }
 ```
 
-All descriptors are registered as `ITriggerTypeDescriptor` singletons and collected by `TriggerTypeRegistry`.
+Backed by `TriggerTypeRegistry` (in `FlowForge.Infrastructure`) which uses a `ConcurrentDictionary`. Registered as a singleton by `AddInfrastructure()`.
 
 ---
 
@@ -105,21 +113,24 @@ A Redis key `custom-script:last-run:{triggerId}` prevents a custom script from r
 
 ## TriggersController
 
-### `GET /api/trigger-types`
-Returns all registered `ITriggerTypeDescriptor` instances as a list:
+### `GET /api/triggers/types`
+Returns all registered `ITriggerTypeDescriptor` schemas ordered by `displayName`:
 ```json
 [
   {
     "typeId": "schedule",
     "displayName": "Cron Schedule",
     "description": "Fires on a cron expression",
-    "configSchema": { "fields": [...] }
+    "fields": [...]
   }
 ]
 ```
 
-### `POST /api/trigger-types/{typeId}/validate`
-Validates a `ConfigJson` object against the descriptor's schema. Returns 200 with a list of validation errors (empty = valid), or 404 if `typeId` is unknown.
+### `GET /api/triggers/types/{typeId}`
+Returns the schema for a single trigger type, or 404 if unknown.
+
+### `POST /api/triggers/types/{typeId}/validate-config`
+Body: `{ "configJson": "..." }`. Returns `{ typeId, isValid, errors[] }`. 422 if invalid, 404 if type unknown.
 
 ### `GET /api/automations/{id}/triggers`
 Returns all triggers for an automation as `TriggerResponse[]`.
@@ -139,8 +150,8 @@ Removes a trigger. Validates the trigger's name is not referenced in `Automation
 
 ## Adding a New Built-in Trigger Type
 
-1. Create `MyTriggerDescriptor : ITriggerTypeDescriptor` in `FlowForge.WebApi` (or `FlowForge.Infrastructure` if needed by multiple services)
-2. Register as `services.AddSingleton<ITriggerTypeDescriptor, MyTriggerDescriptor>()`
+1. Create `MyTriggerDescriptor : ITriggerTypeDescriptor` in `FlowForge.Infrastructure/Triggers/Descriptors/`
+2. Register it in `ServiceCollectionExtensions.AddTriggerTypeRegistry()`: `registry.Register(new MyTriggerDescriptor())`
 3. Create `MyTriggerEvaluator : ITriggerEvaluator` in `FlowForge.JobAutomator`
 4. Register as `services.AddSingleton<ITriggerEvaluator, MyTriggerEvaluator>()`
 5. Add a constant to `TriggerTypes` static class in `FlowForge.Domain`
@@ -153,6 +164,17 @@ No existing services need to be modified — the registry and evaluator resoluti
 ## Impact on JobAutomator
 
 `AutomationWorker` iterates `IEnumerable<ITriggerEvaluator>`. Each evaluator is matched by `evaluator.TypeId == trigger.TypeId`. Unknown TypeIds log a warning and are treated as `false` — they do not crash the evaluation loop.
+
+---
+
+## Task Type Discovery (Analogous System)
+
+Workflow task handlers (`send-email`, `http-request`, `run-script`) have a parallel discovery system:
+- `ITaskTypeDescriptor` / `ITaskTypeRegistry` in `FlowForge.Domain/Tasks/`
+- Descriptors in `FlowForge.Infrastructure/Tasks/Descriptors/`
+- Endpoint: `GET /api/task-types` · `GET /api/task-types/{taskId}`
+
+See `SPECS.md` → "Task Type Discovery" for full details.
 
 ---
 
