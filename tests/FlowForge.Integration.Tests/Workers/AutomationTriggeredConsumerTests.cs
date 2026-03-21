@@ -150,6 +150,40 @@ public class AutomationTriggeredConsumerTests : IAsyncLifetime
         await jobsTx.RollbackAsync();
     }
 
+    [Fact]
+    public async Task WhenAutomationIsDisabled_DropsEventAndCreatesNoJob()
+    {
+        // Arrange — seed disabled automation
+        var (automation, hostGroup, connectionId) = await SeedAutomationAsync();
+        automation.Disable();
+        await _platformDb.SaveChangesAsync();
+
+        using var jobsDb = _fixture.CreateJobsDbContext();
+        using var jobsTx = await jobsDb.Database.BeginTransactionAsync();
+
+        var @event = new AutomationTriggeredEvent(
+            AutomationId: automation.Id,
+            HostGroupId: hostGroup.Id,
+            ConnectionId: connectionId,
+            TaskId: automation.TaskId,
+            TriggeredAt: DateTimeOffset.UtcNow);
+
+        var consumer = BuildConsumer(new FakeMessageConsumer(@event), connectionId, jobsDb);
+
+        // Act
+        await consumer.RunAsync(CancellationToken.None);
+
+        // Assert — no job created
+        var jobs = await jobsDb.Jobs.Where(j => j.AutomationId == automation.Id).ToListAsync();
+        jobs.Should().BeEmpty("disabled automation must not produce jobs");
+
+        // Assert — no outbox message written
+        var outbox = await _platformDb.OutboxMessages.FirstOrDefaultAsync(m => m.EventType == "JobCreatedEvent");
+        outbox.Should().BeNull();
+
+        await jobsTx.RollbackAsync();
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private async Task<(Automation automation, HostGroup hostGroup, string connectionId)> SeedAutomationAsync()

@@ -67,9 +67,9 @@ public class JobStatusChangedConsumerTests : IAsyncLifetime
         // Act
         await RunConsumerAsync(new FakeMessageConsumer(@event), connectionId, jobsDb);
 
-        // Assert — job transitioned
-        await jobsDb.Entry(job).ReloadAsync();
-        job.Status.Should().Be(JobStatus.Started);
+        // Assert — job transitioned (query fresh to avoid EF tracking conflicts)
+        var updatedJob = await jobsDb.Jobs.FindAsync(job.Id);
+        updatedJob!.Status.Should().Be(JobStatus.Started);
 
         // Assert — ActiveJobId NOT cleared (non-terminal status)
         await _platformDb.Entry(automation).ReloadAsync();
@@ -110,10 +110,10 @@ public class JobStatusChangedConsumerTests : IAsyncLifetime
         // Act
         await RunConsumerAsync(new FakeMessageConsumer(@event), connectionId, jobsDb);
 
-        // Assert — job transitioned and message set
-        await jobsDb.Entry(job).ReloadAsync();
-        job.Status.Should().Be(terminalStatus);
-        job.Message.Should().Be("done");
+        // Assert — job transitioned and message set (query fresh to avoid EF tracking conflicts)
+        var updatedJob = await jobsDb.Jobs.FindAsync(job.Id);
+        updatedJob!.Status.Should().Be(terminalStatus);
+        updatedJob.Message.Should().Be("done");
 
         // Assert — ActiveJobId cleared
         await _platformDb.Entry(automation).ReloadAsync();

@@ -3,16 +3,20 @@ using FlowForge.Domain.Exceptions;
 using FlowForge.Domain.Repositories;
 using FlowForge.Domain.ValueObjects;
 using FlowForge.Infrastructure.Caching;
+using FlowForge.Infrastructure.Encryption;
 using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.Infrastructure.Persistence.Platform;
 using FlowForge.Infrastructure.Repositories;
 using FlowForge.Infrastructure.Triggers;
 using FlowForge.Infrastructure.Triggers.Descriptors;
 using FlowForge.Integration.Tests.Infrastructure;
+using FlowForge.WebApi.DTOs.Requests;
 using FlowForge.WebApi.Services;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using System.Text.Json;
 
@@ -119,6 +123,76 @@ public class AutomationServiceTests : IAsyncLifetime
             .WithMessage("*disabled*");
     }
 
+    // ── Encryption / redaction ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CreateAutomation_SqlTrigger_StoresEncryptedConnectionStringInDb()
+    {
+        // Arrange
+        var hostGroup = HostGroup.Create("HG-Enc", "conn-enc");
+        await _db.HostGroups.AddAsync(hostGroup);
+        await _db.SaveChangesAsync();
+
+        var redis = Substitute.For<IRedisService>();
+        var sut = BuildServiceWithRealEncryption(redis);
+
+        var request = new CreateAutomationRequest(
+            Name: "Encrypt Test",
+            Description: null,
+            HostGroupId: hostGroup.Id,
+            TaskId: "run-script",
+            Triggers: [new CreateTriggerRequest(
+                Name: "sql-check",
+                TypeId: "sql",
+                ConfigJson: """{"connectionString":"Host=db;Password=s3cr3t","query":"SELECT 1"}""")],
+            TriggerCondition: new TriggerConditionRequest(null, "sql-check", null));
+
+        // Act
+        await sut.CreateAsync(request, CancellationToken.None);
+
+        // Assert — raw stored value must start with enc:v1:
+        var stored = await _db.Automations
+            .Include(a => a.Triggers)
+            .FirstAsync(a => a.Name == "Encrypt Test");
+        var storedConfig = JsonDocument.Parse(stored.Triggers[0].ConfigJson);
+        storedConfig.RootElement.GetProperty("connectionString").GetString()
+            .Should().StartWith("enc:v1:", "connection string must be encrypted at rest");
+    }
+
+    [Fact]
+    public async Task GetAutomation_SqlTrigger_RedactsConnectionStringInResponse()
+    {
+        // Arrange — seed automation with encrypted connection string
+        var hostGroup = HostGroup.Create("HG-Redact", "conn-redact");
+        await _db.HostGroups.AddAsync(hostGroup);
+        await _db.SaveChangesAsync();
+
+        var redis = Substitute.For<IRedisService>();
+        var sut = BuildServiceWithRealEncryption(redis);
+
+        var request = new CreateAutomationRequest(
+            Name: "Redact Test",
+            Description: null,
+            HostGroupId: hostGroup.Id,
+            TaskId: "run-script",
+            Triggers: [new CreateTriggerRequest(
+                Name: "sql-check",
+                TypeId: "sql",
+                ConfigJson: """{"connectionString":"Host=db;Password=s3cr3t","query":"SELECT 1"}""")],
+            TriggerCondition: new TriggerConditionRequest(null, "sql-check", null));
+
+        var created = await sut.CreateAsync(request, CancellationToken.None);
+
+        // Act — read back through the service
+        var response = await sut.GetByIdAsync(created.Id, CancellationToken.None);
+
+        // Assert — API response shows *** for the connection string
+        var responseTrigger = response.Triggers.Single();
+        var responseConfig = JsonDocument.Parse(responseTrigger.ConfigJson);
+        responseConfig.RootElement.GetProperty("connectionString").GetString()
+            .Should().Be("***", "sensitive fields must be redacted in API responses");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private async Task<(Automation automation, IRedisService redis)> SeedWebhookAutomationAsync(string? secretHash)
@@ -139,7 +213,7 @@ public class AutomationServiceTests : IAsyncLifetime
         redis.SetAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<TimeSpan?>())
             .Returns(ci =>
             {
-                storedValues[ci.Arg<string>()] = ci.ArgAt<string>(1);
+                storedValues[ci.ArgAt<string>(0)] = ci.ArgAt<string>(1);
                 return Task.CompletedTask;
             });
         redis.GetAsync(Arg.Any<string>())
@@ -162,6 +236,36 @@ public class AutomationServiceTests : IAsyncLifetime
         registry.Register(new WebhookTriggerDescriptor());
         registry.Register(new CustomScriptTriggerDescriptor());
 
-        return new AutomationService(automationRepo, hostGroupRepo, registry, outboxWriter, redis);
+        // Pass-through encryption stub — existing webhook tests don't exercise encryption
+        var encryption = Substitute.For<IEncryptionService>();
+        encryption.Encrypt(Arg.Any<string>()).Returns(ci => ci.Arg<string>());
+        encryption.Decrypt(Arg.Any<string>()).Returns(ci => ci.Arg<string>());
+        encryption.IsEncrypted(Arg.Any<string>()).Returns(false);
+
+        return new AutomationService(automationRepo, hostGroupRepo, registry, encryption, outboxWriter, redis);
+    }
+
+    private AutomationService BuildServiceWithRealEncryption(IRedisService redis)
+    {
+        var automationRepo = new AutomationRepository(_db);
+        var hostGroupRepo = new HostGroupRepository(_db);
+        var outboxWriter = new OutboxWriter(_db);
+
+        var registry = new TriggerTypeRegistry();
+        registry.Register(new ScheduleTriggerDescriptor());
+        registry.Register(new SqlTriggerDescriptor());
+        registry.Register(new JobCompletedTriggerDescriptor());
+        registry.Register(new WebhookTriggerDescriptor());
+        registry.Register(new CustomScriptTriggerDescriptor());
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection([
+                new KeyValuePair<string, string?>(
+                    "FlowForge:EncryptionKey",
+                    "dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXRlc3Q=")])
+            .Build();
+        var encryption = new AesEncryptionService(config, NullLogger<AesEncryptionService>.Instance);
+
+        return new AutomationService(automationRepo, hostGroupRepo, registry, encryption, outboxWriter, redis);
     }
 }
