@@ -18,6 +18,7 @@ builder.WebHost.UseUrls("http://+:8080");
 
 // Shared Infrastructure (Redis, etc.)
 builder.Services.AddRedis(builder.Configuration);
+builder.Services.AddEncryption();
 builder.Services.AddFlowForgeTelemetry(builder.Configuration, "JobAutomator");
 
 // HTTP client for one-time startup snapshot

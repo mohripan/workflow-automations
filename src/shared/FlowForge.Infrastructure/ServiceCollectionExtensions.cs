@@ -3,6 +3,7 @@ using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.DeadLetter;
 using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.Infrastructure.Caching;
+using FlowForge.Infrastructure.Encryption;
 using FlowForge.Infrastructure.Telemetry;
 using FlowForge.Infrastructure.Persistence.Platform;
 using FlowForge.Infrastructure.Persistence.Jobs;
@@ -30,8 +31,15 @@ public static class ServiceCollectionExtensions
         services.AddPersistence(config);
         services.AddTriggerTypeRegistry();
         services.AddTaskTypeRegistry();
+        services.AddEncryption();
         if (serviceName is not null)
             services.AddFlowForgeTelemetry(config, serviceName);
+        return services;
+    }
+
+    public static IServiceCollection AddEncryption(this IServiceCollection services)
+    {
+        services.AddSingleton<IEncryptionService, AesEncryptionService>();
         return services;
     }
 

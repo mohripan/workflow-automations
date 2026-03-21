@@ -6,6 +6,7 @@ using FlowForge.Domain.Repositories;
 using FlowForge.Domain.Triggers;
 using FlowForge.Domain.ValueObjects;
 using FlowForge.Infrastructure.Caching;
+using FlowForge.Infrastructure.Encryption;
 using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.WebApi.DTOs.Requests;
 using FlowForge.WebApi.DTOs.Responses;
@@ -16,9 +17,12 @@ public class AutomationService(
     IAutomationRepository automationRepo,
     IHostGroupRepository hostGroupRepo,
     ITriggerTypeRegistry registry,
+    IEncryptionService encryption,
     IOutboxWriter outboxWriter,
     IRedisService redis) : IAutomationService
 {
+    private static readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
+
     public async Task<PagedResult<AutomationResponse>> GetAllAsync(AutomationQueryParams query, CancellationToken ct)
     {
         var automations = await automationRepo.GetAllAsync(ct);
@@ -49,7 +53,7 @@ public class AutomationService(
         ValidateTriggerConfigs(request.Triggers);
 
         var triggers = request.Triggers
-            .Select(t => Trigger.Create(t.Name, t.TypeId, t.ConfigJson))
+            .Select(t => Trigger.Create(t.Name, t.TypeId, EncryptSensitiveFields(t.TypeId, t.ConfigJson)))
             .ToList();
 
         var conditionRoot = MapConditionNode(request.TriggerCondition);
@@ -80,7 +84,7 @@ public class AutomationService(
         ValidateTriggerConfigs(request.Triggers);
 
         var triggers = request.Triggers
-            .Select(t => Trigger.Create(t.Name, t.TypeId, t.ConfigJson))
+            .Select(t => Trigger.Create(t.Name, t.TypeId, EncryptSensitiveFields(t.TypeId, t.ConfigJson)))
             .ToList();
 
         var conditionRoot = MapConditionNode(request.TriggerCondition);
@@ -160,6 +164,63 @@ public class AutomationService(
         return snapshots;
     }
 
+    // ── Encryption helpers ───────────────────────────────────────────────────
+
+    /// <summary>Encrypts sensitive fields in a trigger's configJson before storage.</summary>
+    private string EncryptSensitiveFields(string typeId, string configJson)
+    {
+        var sensitiveFields = registry.Get(typeId)?.GetSensitiveFieldNames() ?? [];
+        if (sensitiveFields.Count == 0) return configJson;
+
+        var doc = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(configJson, _jsonOptions);
+        if (doc is null) return configJson;
+
+        var result = new Dictionary<string, object?>(doc.Count);
+        foreach (var (key, value) in doc)
+        {
+            // Encrypt string values for sensitive fields (skip if already encrypted)
+            if (sensitiveFields.Contains(key, StringComparer.OrdinalIgnoreCase)
+                && value.ValueKind == JsonValueKind.String)
+            {
+                var plain = value.GetString() ?? string.Empty;
+                result[key] = encryption.IsEncrypted(plain) ? plain : encryption.Encrypt(plain);
+            }
+            else
+            {
+                result[key] = value;
+            }
+        }
+
+        return JsonSerializer.Serialize(result);
+    }
+
+    /// <summary>
+    /// Replaces sensitive field values with "***" in the configJson returned to API callers.
+    /// The stored (encrypted) value is never sent to the client.
+    /// </summary>
+    private string RedactSensitiveFields(string typeId, string configJson)
+    {
+        var sensitiveFields = registry.Get(typeId)?.GetSensitiveFieldNames() ?? [];
+        if (sensitiveFields.Count == 0) return configJson;
+
+        var doc = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(configJson, _jsonOptions);
+        if (doc is null) return configJson;
+
+        var result = new Dictionary<string, object?>(doc.Count);
+        foreach (var (key, value) in doc)
+        {
+            if (sensitiveFields.Contains(key, StringComparer.OrdinalIgnoreCase)
+                && value.ValueKind == JsonValueKind.String)
+                result[key] = "***";
+            else
+                result[key] = value;
+        }
+
+        return JsonSerializer.Serialize(result);
+    }
+
+    // ── Private mapping ──────────────────────────────────────────────────────
+
     private void ValidateTriggerConfigs(IEnumerable<CreateTriggerRequest> triggers)
     {
         foreach (var t in triggers)
@@ -180,6 +241,7 @@ public class AutomationService(
         var hostGroup = await hostGroupRepo.GetByIdAsync(a.HostGroupId, ct)
             ?? throw new InvalidAutomationException($"Host group {a.HostGroupId} not found.");
 
+        // Snapshot carries encrypted configJson — evaluators (in JobAutomator) decrypt at eval time.
         return new AutomationSnapshot(
             Id: a.Id,
             Name: a.Name,
@@ -197,7 +259,7 @@ public class AutomationService(
 
     private static TriggerConditionNode MapConditionNodeToSnapshot(TriggerConditionNode node) => node;
 
-    private static AutomationResponse MapToResponse(Automation a) => new(
+    private AutomationResponse MapToResponse(Automation a) => new(
         Id: a.Id,
         Name: a.Name,
         Description: a.Description,
@@ -207,7 +269,9 @@ public class AutomationService(
         TimeoutSeconds: a.TimeoutSeconds,
         MaxRetries: a.MaxRetries,
         TaskConfig: a.TaskConfig,
-        Triggers: a.Triggers.Select(t => new TriggerResponse(t.Id, t.Name, t.TypeId, t.ConfigJson)).ToList(),
+        // Sensitive fields are redacted — passwords never leave the server in API responses
+        Triggers: a.Triggers.Select(t => new TriggerResponse(
+            t.Id, t.Name, t.TypeId, RedactSensitiveFields(t.TypeId, t.ConfigJson))).ToList(),
         TriggerCondition: MapConditionResponse(a.ConditionRoot),
         CreatedAt: a.CreatedAt,
         UpdatedAt: a.UpdatedAt

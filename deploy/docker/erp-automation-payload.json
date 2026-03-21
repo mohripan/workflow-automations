@@ -1,0 +1,17 @@
+{
+  "name": "ERP Low Stock Alert",
+  "description": "Sends an email alert when any product quantity drops below reorder threshold",
+  "taskId": "run-script",
+  "hostGroupId": "9255f634-55f5-4f0d-b5b8-4160d1f1048b",
+  "triggers": [
+    {
+      "name": "low-stock-check",
+      "typeId": "sql",
+      "configJson": "{\"connectionString\": \"Host=postgres-erp-test;Database=erp_inventory;Username=postgres;Password=postgres\", \"query\": \"SELECT CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END FROM products WHERE quantity < reorder_threshold\"}"
+    }
+  ],
+  "triggerCondition": {
+    "triggerName": "low-stock-check"
+  },
+  "taskConfig": "{\"interpreter\": \"/app/venv/bin/python3\", \"scriptPath\": \"/app/examples/send-email-resend/send_email.py\", \"packages\": [\"resend\"], \"env\": {\"RESEND_API_KEY\": \"re_2sywtsT7_9RUEfGsYSQR78XL5p3WUbeU4\", \"EMAIL_FROM\": \"FlowForge <noreply@kinetixflow.site>\", \"EMAIL_TO\": \"mohripan16@gmail.com\", \"EMAIL_SUBJECT\": \"\\u26a0\\ufe0f Low Stock Alert \\u2014 ERP Inventory\", \"EMAIL_HTML\": \"<h2>&#9888;&#65039; Low Stock Alert</h2><p>One or more products in your ERP inventory have dropped below their reorder threshold of 5 units.</p><p>Please reorder immediately.</p>\"}}"
+}

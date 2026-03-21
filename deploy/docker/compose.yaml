@@ -40,6 +40,26 @@ services:
       retries: 5
       start_period: 30s
 
+  # Test ERP database — used for SQL trigger demos
+  postgres-erp-test:
+    image: postgres:17-alpine
+    container_name: flowforge-db-erp-test
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: erp_inventory
+    ports:
+      - "5456:5432"
+    volumes:
+      - flowforge-db-erp-test-data:/var/lib/postgresql/data
+      - ./erp-test-init.sql:/docker-entrypoint-initdb.d/erp-test-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
   # Host Group: titan
   postgres-titan:
     image: postgres:17-alpine
@@ -103,6 +123,7 @@ services:
   # ── Application Services ───────────────────────────────────────────────────
 
   webapi:
+    restart: unless-stopped
     build:
       context: ../..
       dockerfile: src/services/FlowForge.WebApi/Dockerfile
@@ -136,6 +157,7 @@ services:
       start_period: 30s
 
   job-automator:
+    restart: unless-stopped
     build:
       context: ../..
       dockerfile: src/services/FlowForge.JobAutomator/Dockerfile
@@ -157,6 +179,7 @@ services:
         condition: service_healthy
 
   job-orchestrator:
+    restart: unless-stopped
     build:
       context: ../..
       dockerfile: src/services/FlowForge.JobOrchestrator/Dockerfile
@@ -185,6 +208,7 @@ services:
         condition: service_healthy
 
   workflowhost-minion:
+    restart: unless-stopped
     build:
       context: ../..
       dockerfile: src/services/FlowForge.WorkflowHost/Dockerfile
@@ -209,6 +233,7 @@ services:
         condition: service_healthy
 
   workflowhost-titan:
+    restart: unless-stopped
     build:
       context: ../..
       dockerfile: src/services/FlowForge.WorkflowHost/Dockerfile
@@ -237,3 +262,4 @@ volumes:
   flowforge-db-minion-data:
   flowforge-db-titan-data:
   flowforge-db-quartz-data:
+  flowforge-db-erp-test-data:

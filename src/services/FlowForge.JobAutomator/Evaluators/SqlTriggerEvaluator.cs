@@ -1,25 +1,34 @@
 using FlowForge.Contracts.Events;
 using FlowForge.Domain.Triggers;
 using FlowForge.Infrastructure.Caching;
+using FlowForge.Infrastructure.Encryption;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using System.Text.Json;
 
 namespace FlowForge.JobAutomator.Evaluators;
 
-public class SqlTriggerEvaluator(IRedisService redis, ILogger<SqlTriggerEvaluator> logger) : ITriggerEvaluator
+public class SqlTriggerEvaluator(
+    IRedisService redis,
+    IEncryptionService encryption,
+    ILogger<SqlTriggerEvaluator> logger) : ITriggerEvaluator
 {
     public string TypeId => TriggerTypes.Sql;
 
+    private static readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
+
     public async Task<bool> EvaluateAsync(TriggerSnapshot trigger, CancellationToken ct)
     {
-        var config = JsonSerializer.Deserialize<SqlConfig>(trigger.ConfigJson);
+        var config = JsonSerializer.Deserialize<SqlConfig>(trigger.ConfigJson, _jsonOptions);
         if (config == null || string.IsNullOrWhiteSpace(config.Query) || string.IsNullOrWhiteSpace(config.ConnectionString))
             return false;
 
+        // Decrypt the connection string — it is stored encrypted at rest
+        var connectionString = encryption.Decrypt(config.ConnectionString);
+
         try
         {
-            using var connection = new NpgsqlConnection(config.ConnectionString);
+            using var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync(ct);
 
             using var command = connection.CreateCommand();

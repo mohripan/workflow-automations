@@ -33,6 +33,13 @@ public class AutomationTriggeredConsumer(
                 var automation = await automationRepo.GetByIdAsync(@event.AutomationId, stoppingToken)
                     ?? throw new AutomationNotFoundException(@event.AutomationId);
 
+                if (!automation.IsEnabled)
+                {
+                    logger.LogInformation(
+                        "Automation {AutomationId} is disabled — dropping triggered event.", @event.AutomationId);
+                    continue;
+                }
+
                 var hostGroup = await hostGroupRepo.GetByIdAsync(automation.HostGroupId, stoppingToken)
                     ?? throw new InvalidAutomationException($"Host group {automation.HostGroupId} not found");
 

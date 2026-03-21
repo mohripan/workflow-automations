@@ -44,12 +44,16 @@ public class SqlTriggerDescriptor : ITriggerTypeDescriptor
                 EnumValues: null)
         ]);
 
+    private static readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    public IReadOnlyList<string> GetSensitiveFieldNames() => ["connectionString"];
+
     public IReadOnlyList<string> ValidateConfig(string configJson)
     {
         var errors = new List<string>();
         try
         {
-            var cfg = JsonSerializer.Deserialize<SqlTriggerConfig>(configJson);
+            var cfg = JsonSerializer.Deserialize<SqlTriggerConfig>(configJson, _jsonOptions);
             if (string.IsNullOrWhiteSpace(cfg?.ConnectionString)) errors.Add("connectionString is required.");
             if (string.IsNullOrWhiteSpace(cfg?.Query)) errors.Add("query is required.");
             if (cfg?.PollingIntervalSeconds < 5) errors.Add("pollingIntervalSeconds must be at least 5.");
