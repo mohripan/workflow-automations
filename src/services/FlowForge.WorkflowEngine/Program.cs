@@ -122,14 +122,14 @@ catch (OperationCanceledException)
     if (timeoutCts?.IsCancellationRequested == true)
     {
         await reporter.ReportStatusAsync(jobId, automationId, connectionId, JobStatus.Error,
-            $"Job timed out after {timeoutSeconds} seconds.", CancellationToken.None);
+            $"Job timed out after {timeoutSeconds} seconds.", null, CancellationToken.None);
         return 1;
     }
-    await reporter.ReportStatusAsync(jobId, automationId, connectionId, JobStatus.Cancelled, "Cancelled", CancellationToken.None);
+    await reporter.ReportStatusAsync(jobId, automationId, connectionId, JobStatus.Cancelled, "Cancelled", null, CancellationToken.None);
     return 0;
 }
 catch (Exception ex)
 {
-    await reporter.ReportStatusAsync(jobId, automationId, connectionId, JobStatus.Error, ex.Message, CancellationToken.None);
+    await reporter.ReportStatusAsync(jobId, automationId, connectionId, JobStatus.Error, ex.Message, null, CancellationToken.None);
     return 1;
 }
