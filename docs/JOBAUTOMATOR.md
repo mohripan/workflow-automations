@@ -134,7 +134,7 @@ Registered as `IEnumerable<ITriggerEvaluator>` (multiple singletons). `Automatio
 Delegates to Quartz.NET. Quartz fires a job that sets a boolean flag in Redis (`schedule:fired:{triggerId}`). The evaluator reads this flag and resets it. Config: `cronExpression`.
 
 ### SqlTriggerEvaluator (`"sql"`)
-Executes a `SELECT` query against a configured database. Returns `true` if the result set is non-empty. Config: `connectionString`, `query`.
+Executes a `SELECT` query against a configured external database. Stores a hash of the result in Redis; returns `true` when the result **changes** (hash differs from the previous run). This gives fire-once-on-transition semantics for boolean queries. Config: `connectionString` (AES-256-GCM encrypted — evaluator decrypts via `IEncryptionService` before connecting), `query`.
 
 ### JobCompletedTriggerEvaluator (`"job-completed"`)
 Reads a Redis key set by `JobCompletedFlagWorker` when a job for the referenced automation completes. Returns `true` if the key exists and clears it. Config: `targetAutomationId`.
@@ -178,8 +178,9 @@ Quartz scheduler ID is `"AUTO"`, scheduler name is `"FlowForgeScheduler"`. Clust
 | Key | Writer | Reader | Description |
 |---|---|---|---|
 | `schedule:fired:{triggerId}` | Quartz job | ScheduleTriggerEvaluator | Cron trigger flag |
+| `sql:result-hash:{triggerId}` | SqlTriggerEvaluator | SqlTriggerEvaluator | Hash of last query result; fires when changed |
 | `job-completed:{automationId}` | JobCompletedFlagWorker | JobCompletedTriggerEvaluator | Job completion flag |
-| `webhook:fired:{triggerId}` | WebhooksController | WebhookTriggerEvaluator | Webhook received flag |
+| `trigger:webhook:{triggerId}:fired` | AutomationsController | WebhookTriggerEvaluator | Webhook received flag (TTL: 10 min) |
 | `automator:last-evaluated` | AutomationWorker | (monitoring) | Timestamp of last pass |
 
 ---
@@ -221,6 +222,7 @@ GET /health/ready  → checks Redis
 
 ```csharp
 builder.Services.AddRedis(builder.Configuration);
+builder.Services.AddEncryption();  // IEncryptionService — used by SqlTriggerEvaluator to decrypt connection strings
 builder.Services.AddFlowForgeTelemetry(builder.Configuration, "JobAutomator");
 
 builder.Services.Configure<AutomationWorkerOptions>(

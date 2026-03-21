@@ -48,11 +48,13 @@ The Web API is an ASP.NET Core 10 application. Its responsibilities are:
 ## AutomationService
 
 Handles all automation and trigger CRUD. Key behaviours:
-- `CreateAsync` calls `Automation.Create(...)` and writes an `AutomationChangedEvent` (type `Created`) to the outbox. `SaveAsync` commits both atomically.
-- `UpdateAsync` calls `automation.Update(...)` and writes `AutomationChangedEvent` (type `Updated`).
+- `CreateAsync` / `UpdateAsync`: calls `EncryptSensitiveFields(typeId, configJson)` on each trigger before storage. Fields declared by `ITriggerTypeDescriptor.GetSensitiveFieldNames()` (e.g. SQL `connectionString`) are AES-256-GCM encrypted. Writes `AutomationChangedEvent` to outbox atomically with `SaveAsync`.
 - `DeleteAsync` cascade-deletes triggers and writes `AutomationChangedEvent` (type `Deleted`).
-- `MapToSnapshotAsync` builds `AutomationSnapshot` including `TimeoutSeconds` and `MaxRetries` for the outbox event.
+- `MapToResponse`: calls `RedactSensitiveFields(typeId, configJson)` — sensitive fields become `"***"` in all API responses. Clients never see encrypted ciphertext or raw secrets.
+- `MapToSnapshotAsync`: carries the **encrypted** `configJson` into the outbox snapshot. Evaluators (in JobAutomator) decrypt at evaluation time.
 - `AddTriggerAsync` / `UpdateTriggerAsync` / `RemoveTriggerAsync` each write `AutomationChangedEvent` (type `Updated`) so the JobAutomator cache stays current.
+
+`AutomationService` depends on `IEncryptionService` (injected via constructor).
 
 ---
 
@@ -133,9 +135,11 @@ public record JobResponse(
 
 Consumes `AutomationTriggeredEvent` from `flowforge:automation-triggered`.
 
-1. Load `Automation` and `HostGroup`; resolve `IJobRepository` by `ConnectionId`
-2. **Duplicate prevention:** if `automation.ActiveJobId` is set, check that job's status. If still active → skip. If terminal or missing → `automation.ClearActiveJob()` and continue
-3. `Job.Create(automationId, taskId, connectionId, hostGroupId, triggeredAt, timeoutSeconds, retryAttempt, maxRetries, taskConfig)` — `taskConfig` is snapshotted from the event
+1. Load `Automation` from the database (re-fetch — not from cache)
+2. **IsEnabled guard:** if `automation.IsEnabled == false` → log and `continue`. This is a last-line-of-defence check against events already in-flight when an automation is disabled
+3. Load `HostGroup`; resolve `IJobRepository` by `ConnectionId`
+4. **Duplicate prevention:** if `automation.ActiveJobId` is set, check that job's status. If still active → skip. If terminal or missing → `automation.ClearActiveJob()` and continue
+5. `Job.Create(automationId, taskId, connectionId, hostGroupId, triggeredAt, timeoutSeconds, retryAttempt, maxRetries, taskConfig)` — `taskConfig` is snapshotted from the event
 4. `automation.SetActiveJob(job.Id)`
 5. Write `JobCreatedEvent` to outbox
 6. `automationRepo.SaveAsync(automation)` — commits automation update + outbox in one transaction
@@ -231,9 +235,12 @@ Hub URL: `ws://.../hubs/job-status`. Clients call `JoinJobGroup(jobId)` to subsc
 
 ## Webhook Flow
 
-1. `POST /api/automations/{id}/triggers/{name}/webhook` with optional `X-FlowForge-Signature` header
-2. `AutomationService.FireWebhookAsync` validates HMAC-SHA256 if `secretHash` is stored in the trigger config
-3. On validation pass: `redis.SetAsync($"webhook:fired:{triggerId}", "1", TimeSpan.FromMinutes(5))`
+1. `POST /api/automations/{id}/webhook` with optional `X-Webhook-Secret` header
+2. `AutomationService.FireWebhookAsync`:
+   - Throws `InvalidAutomationException` if automation is disabled
+   - Finds the webhook trigger on the automation
+   - If `config.SecretHash` is set: requires `X-Webhook-Secret` header; verifies with `BCrypt.Net.BCrypt.Verify`. Throws `UnauthorizedWebhookException` on mismatch or missing header
+3. On validation pass: `redis.SetAsync($"trigger:webhook:{triggerId}:fired", "1", TimeSpan.FromMinutes(10))`
 4. JobAutomator's `WebhookTriggerEvaluator` reads and clears this key on its next evaluation pass
 
 ---
@@ -264,7 +271,10 @@ GET /health/ready  → checks PostgreSQL (platform DB) + Redis
   },
   "Redis": { "ConnectionString": "localhost:6379" },
   "AllowedOrigins": ["http://localhost:3000"],
-  "OpenTelemetry": { "OtlpEndpoint": "http://localhost:4317" }
+  "OpenTelemetry": { "OtlpEndpoint": "http://localhost:4317" },
+  "FlowForge": {
+    "EncryptionKey": "<base64-encoded 32-byte AES key>"
+  }
 }
 ```
 
@@ -274,6 +284,7 @@ GET /health/ready  → checks PostgreSQL (platform DB) + Redis
 
 ```csharp
 builder.Services.AddInfrastructure(builder.Configuration, "WebApi");
+builder.Services.AddEncryption();  // IEncryptionService / AesEncryptionService
 builder.Services.Configure<OutboxRelayOptions>(
     builder.Configuration.GetSection(OutboxRelayOptions.SectionName));
 

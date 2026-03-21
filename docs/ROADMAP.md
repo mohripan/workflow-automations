@@ -24,6 +24,12 @@ This document tracks the next phase of FlowForge development. The focus is on ma
 | 4 | [Job Dispatcher Resilience — No-Host Queuing](#4-job-dispatcher-resilience--no-host-queuing) | Reliability | `[x]` |
 | 5 | [Task Type Discovery API](#5-task-type-discovery-api) | Developer Experience | `[x]` |
 | 6 | [Structured Job Output](#6-structured-job-output) | Observability | `[x]` |
+| 7 | [Trigger Config Encryption](#7-trigger-config-encryption) | Security | `[x]` |
+| 8 | [Cron Deserialization Bug Fix](#8-cron-deserialization-bug-fix) | Bug Fix | `[x]` |
+| 9 | [Disabled Automation Guard](#9-disabled-automation-guard) | Reliability | `[x]` |
+| 10 | [SQL Trigger E2E Demo — ERP Inventory](#10-sql-trigger-e2e-demo--erp-inventory) | E2E Demo | `[x]` |
+| 11 | [Docker Compose Service Restart Policy](#11-docker-compose-service-restart-policy) | Infrastructure | `[x]` |
+| 12 | [Test Suite Repair and Expansion](#12-test-suite-repair-and-expansion) | Testing | `[x]` |
 
 ---
 
@@ -461,6 +467,68 @@ The items have the following hard dependencies:
 #2 (Dockerize)       ──► #3 (consistent E2E environment)
 #1 + #2 + #3         = working E2E demo
 #4, #5, #6           = independent — can be done in any order after #1
+#7, #8, #9, #10, #11, #12 = all completed independently
 ```
 
-Recommended sequence: **#1 → #2 → #3** in parallel where possible (once #1 is done, #2 and #3 can proceed simultaneously), then **#4 → #5 → #6** in whatever order suits.
+---
+
+## 7. Trigger Config Encryption
+
+AES-256-GCM field-level encryption for sensitive trigger config values (e.g. SQL `connectionString`).
+
+- `IEncryptionService` / `AesEncryptionService` in `FlowForge.Infrastructure/Encryption/`
+- Platform master key from `FlowForge:EncryptionKey` config (base64 32-byte). Dev fallback: all-zeros key with loud logger warning.
+- Storage format: `enc:v1:<base64(nonce||ciphertext||tag)>` — 12-byte nonce, 128-bit auth tag
+- `ITriggerTypeDescriptor.GetSensitiveFieldNames()` — default interface method, returns `[]`. Overridden by `SqlTriggerDescriptor` to return `["connectionString"]`
+- `AutomationService`: encrypts sensitive fields on `CreateAsync`/`UpdateAsync`; redacts to `***` in all API responses; passes encrypted `configJson` in snapshots
+- `SqlTriggerEvaluator`: decrypts `connectionString` at evaluation time before connecting
+- `AddEncryption()` extension method registers the service; called in `WebApi` and `JobAutomator` `Program.cs`
+
+---
+
+## 8. Cron Deserialization Bug Fix
+
+`System.Text.Json` is case-sensitive by default. Trigger `configJson` is written as camelCase JSON (`cronExpression`) but the C# records used for deserialization have PascalCase properties (`CronExpression`). This caused `QuartzScheduleSync.SyncAsync` to silently skip `ScheduleJob` calls — the Quartz table was always empty and no schedule triggers ever fired.
+
+Fix: `JsonSerializerOptions` with `PropertyNameCaseInsensitive = true` added to all trigger descriptor `ValidateConfig` methods and `QuartzScheduleSync.SyncAsync`. A compile-time ambiguity between `Quartz.JsonSerializerOptions` and `System.Text.Json.JsonSerializerOptions` in `QuartzScheduleSync.cs` was resolved with full qualification.
+
+---
+
+## 9. Disabled Automation Guard
+
+`AutomationTriggeredConsumer` had no `IsEnabled` check. Events already queued in Redis before an automation was disabled would still create jobs.
+
+Fix: After loading the automation from the database, the consumer now checks `if (!automation.IsEnabled)` and drops the event (`continue`) before any job creation logic runs. This is a last-line-of-defence check — the JobAutomator cache already skips disabled automations, but in-flight events bypass the cache.
+
+---
+
+## 10. SQL Trigger E2E Demo — ERP Inventory
+
+Added a self-contained ERP inventory demo environment:
+
+- `deploy/docker/postgres-erp-test` — PostgreSQL container on port 5456, `erp_inventory` DB
+- `deploy/docker/erp-test-init.sql` — creates `locations` and `products` tables; seeds 5 products all with `quantity > 5`
+- `deploy/docker/erp-automation-payload.json` — ready-to-use payload for creating the ERP low-stock automation via `curl -d @erp-automation-payload.json`
+- SQL trigger query: `SELECT CASE WHEN COUNT(*) > 0 THEN 1 ELSE 0 END FROM products WHERE quantity < reorder_threshold`
+- Task: `run-script` → `send_email.py` via Resend API; fires when a product's `quantity` is manually lowered below its `reorder_threshold`
+
+---
+
+## 11. Docker Compose Service Restart Policy
+
+All five application services (`webapi`, `job-automator`, `job-orchestrator`, `workflowhost-minion`, `workflowhost-titan`) now have `restart: unless-stopped`. Previously, a transient crash (e.g. the orchestrator hitting a missing-table error during a WebApi restart window) would leave the container exited with no recovery — jobs would pile up in `Pending` indefinitely.
+
+---
+
+## 12. Test Suite Repair and Expansion
+
+**Pre-existing failures fixed:**
+- `AutomationServiceTests`: `AutomationService` constructor gained `IEncryptionService` — tests updated with a pass-through stub
+- `AutomationServiceTests`: `NSubstitute.AmbiguousArgumentsException` from `ci.Arg<string>()` with multiple string args — changed to `ci.ArgAt<string>(0)`
+- `JobStatusChangedConsumerTests`: EF Core double-tracking — the consumer loaded a tracked `Job` instance; tests then called `Entry(job).ReloadAsync()` on the same context with a detached instance. Fixed by querying `Jobs.FindAsync(job.Id)` instead
+
+**New tests added (integration tests: 40/40):**
+- `Unit/AesEncryptionServiceTests.cs` — 9 tests: encrypt/decrypt roundtrip, `enc:v1:` prefix, nonce randomness, `IsEncrypted`, plaintext pass-through, tamper detection, invalid key length
+- `Unit/TriggerDescriptorTests.cs` — 9 tests: camelCase validation fix (the root cause of the cron bug), `GetSensitiveFieldNames`, all validation edge cases for `schedule` and `sql` descriptors
+- `Workers/AutomationTriggeredConsumerTests.cs` +1: `WhenAutomationIsDisabled_DropsEventAndCreatesNoJob`
+- `Services/AutomationServiceTests.cs` +2: `CreateAutomation_SqlTrigger_StoresEncryptedConnectionStringInDb`, `GetAutomation_SqlTrigger_RedactsConnectionStringInResponse`

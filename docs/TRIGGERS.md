@@ -29,6 +29,10 @@ public interface ITriggerTypeDescriptor
     string? Description { get; }
     TriggerConfigSchema GetSchema();
     IReadOnlyList<string> ValidateConfig(string configJson);
+
+    // Default implementation returns []. Override to declare fields that contain secrets.
+    // AutomationService encrypts these fields at rest and redacts them to "***" in API responses.
+    IReadOnlyList<string> GetSensitiveFieldNames() => [];
 }
 
 public record TriggerConfigSchema(
@@ -73,8 +77,11 @@ Config fields:
 
 ### SqlTriggerDescriptor (`"sql"`)
 Config fields:
-- `connectionString` (text, required) — JDBC-style connection string for the target database
-- `query` (textarea, required) — SELECT query; fires if result set is non-empty
+- `connectionString` (text, required) — connection string for the target external database
+- `query` (textarea, required) — SELECT query; fires when the result changes from the previous evaluation
+- `pollingIntervalSeconds` (number, optional, min 5, default 30) — polling cadence hint
+
+**Sensitive fields:** `GetSensitiveFieldNames()` returns `["connectionString"]`. The connection string is AES-256-GCM encrypted before storage and redacted to `***` in all API responses. `SqlTriggerEvaluator` decrypts it at evaluation time.
 
 ### JobCompletedTriggerDescriptor (`"job-completed"`)
 Config fields:
@@ -82,7 +89,7 @@ Config fields:
 
 ### WebhookTriggerDescriptor (`"webhook"`)
 Config fields:
-- `secretHash` (text, optional) — SHA-256 hex hash of the HMAC secret; if present, incoming webhook must include a valid `X-FlowForge-Signature` header
+- `secretHash` (text, optional) — BCrypt hash of the shared secret. If present, callers must pass the raw secret in the `X-Webhook-Secret` request header. Verified via `BCrypt.Net.BCrypt.Verify`. If absent, any caller may fire the webhook without a secret.
 
 ---
 
@@ -180,4 +187,6 @@ See `SPECS.md` → "Task Type Discovery" for full details.
 
 ## Impact on WebApi DTOs
 
-`CreateTriggerRequest.ConfigJson` is stored as-is in the `Trigger.ConfigJson` column (jsonb). The WebApi validates it against the `ITriggerTypeDescriptor.ConfigSchema` but does not parse it structurally — that is the evaluator's responsibility.
+`CreateTriggerRequest.ConfigJson` is validated against the `ITriggerTypeDescriptor` schema, then passed through `AutomationService.EncryptSensitiveFields` before storage. Fields named in `GetSensitiveFieldNames()` are AES-256-GCM encrypted in place. In API responses, those same fields are replaced with `"***"` by `RedactSensitiveFields`. The evaluator receives the encrypted `configJson` from the cache snapshot and decrypts at evaluation time.
+
+> **JSON case sensitivity:** all trigger config JSON is stored and transported as camelCase (e.g. `cronExpression`, `connectionString`). Descriptor `ValidateConfig` methods and `QuartzScheduleSync` must use `JsonSerializerOptions { PropertyNameCaseInsensitive = true }` when deserializing — failure to do so silently drops values and causes incorrect behavior.

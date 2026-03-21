@@ -142,6 +142,32 @@ public class MyWorker(IOptions<MyWorkerOptions> options) : BackgroundService
 ```
 Always add the section with its default value to `appsettings.json` so the knob is visible and documented.
 
+### Sensitive Trigger Config Fields
+
+Trigger types that store secrets (e.g. database connection strings) declare them via:
+
+```csharp
+public IReadOnlyList<string> GetSensitiveFieldNames() => ["connectionString"];
+```
+
+This is a default interface method on `ITriggerTypeDescriptor` that returns `[]` unless overridden. `AutomationService` uses this to:
+
+1. **Encrypt on write** — `EncryptSensitiveFields(typeId, configJson)` encrypts declared fields with `IEncryptionService` before storing to the database. Already-encrypted values (starting with `enc:v1:`) are passed through unchanged.
+2. **Redact in responses** — `RedactSensitiveFields(typeId, configJson)` replaces declared fields with `"***"` in all API responses. Clients never see the ciphertext.
+3. **Keep encrypted in snapshots** — `MapToSnapshotAsync` passes the encrypted `configJson` as-is to the outbox. Evaluators in JobAutomator decrypt at runtime using `IEncryptionService.Decrypt` (which passes through non-encrypted values for backwards compat).
+
+`AesEncryptionService` uses AES-256-GCM with a 12-byte random nonce per encryption. Key is read from `FlowForge:EncryptionKey` (base64 32-byte). Dev fallback: all-zeros key with `LogWarning`. Storage format: `enc:v1:<base64(nonce||ciphertext||tag)>`.
+
+### JSON Case-Sensitivity in Trigger Config
+
+Trigger `configJson` is written and transported as camelCase (e.g. `cronExpression`, `connectionString`). All descriptor `ValidateConfig` methods and any code that deserializes trigger config **must** use:
+
+```csharp
+private static readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
+```
+
+Forgetting this causes silent deserialization failures — the field appears null even though the JSON is valid — which can cause evaluators to skip evaluation entirely.
+
 ### Health Checks
 All services expose two endpoints:
 - `GET /health/live` — liveness: `Predicate = _ => false` (always 200; only verifies the process is responsive)

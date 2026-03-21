@@ -67,6 +67,9 @@ FlowForge.sln
 │   │       ├── Caching/
 │   │       │   ├── IRedisService.cs
 │   │       │   └── RedisService.cs
+│   │       ├── Encryption/
+│   │       │   ├── IEncryptionService.cs
+│   │       │   └── AesEncryptionService.cs
 │   │       ├── Messaging/
 │   │       │   ├── Abstractions/
 │   │       │   │   ├── IMessagePublisher.cs
@@ -181,6 +184,9 @@ FlowForge.sln
 │   │   └── AutomationInvariantsTests.cs
 │   └── FlowForge.Integration.Tests/
 │       ├── Infrastructure/           ← shared Testcontainers fixtures
+│       ├── Unit/                     ← unit tests that need Infrastructure but no containers
+│       │   ├── AesEncryptionServiceTests.cs
+│       │   └── TriggerDescriptorTests.cs
 │       ├── Workers/
 │       │   ├── AutomationTriggeredConsumerTests.cs
 │       │   ├── JobStatusChangedConsumerTests.cs
@@ -222,7 +228,7 @@ Id          : Guid
 AutomationId: Guid (FK)
 Name        : string (max 100)   ← referenced by ConditionRoot leaf nodes
 TypeId      : string             ← "schedule", "sql", "webhook", "job-completed", "custom-script"
-ConfigJson  : string (jsonb)
+ConfigJson  : string (jsonb)     ← sensitive fields (e.g. connectionString) are AES-256-GCM encrypted at rest
 CreatedAt   : DateTimeOffset
 UpdatedAt   : DateTimeOffset
 ```
@@ -286,8 +292,9 @@ public static class TriggerTypes
 | Exception | Thrown when |
 |---|---|
 | `AutomationNotFoundException` | `GetByIdAsync` returns null in a consumer |
-| `InvalidAutomationException` | Validation fails in `Automation.Create` / `Update` |
+| `InvalidAutomationException` | Validation fails in `Automation.Create` / `Update`, or referenced host group / trigger not found |
 | `InvalidJobTransitionException` | `Job.Transition` called with an invalid state change |
+| `UnauthorizedWebhookException` | Webhook secret provided is wrong, or secret is required but not provided |
 
 ---
 
@@ -386,10 +393,11 @@ Job DBs are registered as keyed `IJobRepository` services using the `ConnectionI
 - `flowforge-db-minion` — PostgreSQL 17 on port 5433
 - `flowforge-db-titan` — PostgreSQL 17 on port 5434
 - `flowforge-db-quartz` — PostgreSQL 17 on port 5435 (initialised with `quartz-postgresql.sql`)
+- `flowforge-db-erp-test` — PostgreSQL 17 on port 5456 (`erp_inventory` DB, initialised with `erp-test-init.sql`) — ERP demo only
 - `flowforge-redis` — Redis 7 with AOF persistence on port 6379
 - `flowforge-jaeger` — Jaeger all-in-one on ports 16686 (UI) and 4317 (OTLP gRPC)
 
-**Application services:**
+**Application services** (all have `restart: unless-stopped`):
 - `flowforge-webapi` — port 8080, depends on platform DB + both job DBs + Redis
 - `flowforge-job-automator` — port 8081, depends on WebApi healthy
 - `flowforge-job-orchestrator` — port 8092, depends on platform DB + both job DBs + Redis
