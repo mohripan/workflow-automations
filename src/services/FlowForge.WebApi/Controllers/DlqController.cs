@@ -1,3 +1,4 @@
+using FlowForge.Infrastructure.Audit;
 using FlowForge.Infrastructure.Messaging.Redis;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,7 +20,8 @@ public record DlqEntryResponse(
 [Authorize(Policy = "AdminOnly")]
 public class DlqController(
     IConnectionMultiplexer redis,
-    ILogger<DlqController> logger) : ControllerBase
+    ILogger<DlqController> logger,
+    IAuditLogger auditLogger) : ControllerBase
 {
     private readonly IDatabase _db = redis.GetDatabase();
 
@@ -46,6 +48,7 @@ public class DlqController(
             return NotFound();
 
         logger.LogInformation("DLQ entry {EntryId} deleted", id);
+        await auditLogger.LogAsync("dlq.deleted", id);
         return NoContent();
     }
 
@@ -70,6 +73,7 @@ public class DlqController(
         ]);
 
         logger.LogInformation("DLQ entry {EntryId} replayed to stream {SourceStream}", id, sourceStream);
+        await auditLogger.LogAsync("dlq.replayed", id, new { sourceStream });
         return Accepted();
     }
 }

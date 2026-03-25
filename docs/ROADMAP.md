@@ -23,11 +23,11 @@ This document tracks the next phase of FlowForge development. The focus is on se
 | 3 | [Role-Based Authorization (RBAC)](#3-role-based-authorization-rbac) | AuthZ | `[x]` |
 | 4 | [SignalR Authentication](#4-signalr-authentication) | AuthN | `[x]` |
 | 5 | [Service-to-Service Auth (M2M Client Credentials)](#5-service-to-service-auth-m2m-client-credentials) | AuthN | `[x]` |
-| 6 | [User Context & Audit Logging](#6-user-context--audit-logging) | Observability / Security | `[ ]` |
-| 7 | [Webhook HMAC-SHA256 Upgrade](#7-webhook-hmac-sha256-upgrade) | Security | `[ ]` |
-| 8 | [Rate Limiting & Throttling](#8-rate-limiting--throttling) | Security | `[ ]` |
-| 9 | [HTTPS in Development](#9-https-in-development) | Infrastructure | `[ ]` |
-| 10 | [Security Test Suite](#10-security-test-suite) | Testing | `[ ]` |
+| 6 | [User Context & Audit Logging](#6-user-context--audit-logging) | Observability / Security | `[x]` |
+| 7 | [Webhook HMAC-SHA256 Upgrade](#7-webhook-hmac-sha256-upgrade) | Security | `[x]` |
+| 8 | [Rate Limiting & Throttling](#8-rate-limiting--throttling) | Security | `[x]` |
+| 9 | [HTTPS in Development](#9-https-in-development) | Infrastructure | `[x]` |
+| 10 | [Security Test Suite](#10-security-test-suite) | Testing | `[x]` |
 
 ---
 

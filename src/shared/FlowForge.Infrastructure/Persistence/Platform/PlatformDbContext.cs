@@ -10,6 +10,7 @@ public class PlatformDbContext(DbContextOptions<PlatformDbContext> options) : Db
     public DbSet<WorkflowHost> WorkflowHosts => Set<WorkflowHost>();
     public DbSet<HostGroup> HostGroups => Set<HostGroup>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

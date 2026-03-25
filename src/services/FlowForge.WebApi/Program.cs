@@ -1,6 +1,7 @@
 using FlowForge.Infrastructure;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.Redis;
+using Microsoft.AspNetCore.HttpOverrides;
 using OpenTelemetry.Trace;
 using FlowForge.WebApi.Hubs;
 using FlowForge.WebApi.Middleware;
@@ -18,12 +19,18 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using FluentValidation;
 using FluentValidation.AspNetCore;
+using System.Security.Claims;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add Infrastructure
 builder.Services.AddInfrastructure(builder.Configuration, "WebApi");
 builder.Services.AddOpenTelemetry().WithTracing(t => t.AddAspNetCoreInstrumentation());
+
+// Add Audit Logging (requires HttpContext — must come after AddInfrastructure)
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddAuditLogging();
 
 // Add Health Checks
 var pgConnStr = builder.Configuration.GetConnectionString("DefaultConnection")
@@ -109,8 +116,50 @@ builder.Services.AddHostedService<AutomationTriggeredConsumer>();
 builder.Services.AddHostedService<JobStatusChangedConsumer>();
 builder.Services.AddHostedService<OutboxRelayWorker>();
 
+// Add Rate Limiting
+builder.Services.AddRateLimiter(options =>
+{
+    // Anonymous webhook endpoint: 30 requests / minute per IP
+    options.AddPolicy("webhook", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit          = 30,
+                Window               = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit           = 0,
+            }));
+
+    // Global: authenticated non-admin users → 300 / minute per sub claim.
+    // Anonymous and admin requests are not globally limited.
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+    {
+        var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null || context.User.IsInRole("admin"))
+            return RateLimitPartition.GetNoLimiter("unlimited");
+
+        return RateLimitPartition.GetFixedWindowLimiter(userId, _ =>
+            new FixedWindowRateLimiterOptions
+            {
+                PermitLimit          = 300,
+                Window               = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit           = 0,
+            });
+    });
+
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.Headers.RetryAfter = "60";
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new { error = "Too many requests. Please retry after 60 seconds." }, ct);
+    };
+});
+
 // Add CORS
-builder.Services.AddCors(options => 
+builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy =>
         policy.WithOrigins(builder.Configuration.GetSection("AllowedOrigins").Get<string[]>() ?? ["http://localhost:3000"])
               .AllowAnyHeader()
@@ -141,10 +190,16 @@ if (app.Environment.IsDevelopment())
     });
 }
 
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+});
+
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 app.MapControllers();
 app.MapHub<JobStatusHub>("/hubs/job-status").RequireAuthorization();
 
@@ -153,3 +208,6 @@ app.MapHealthChecks("/health/live",  new HealthCheckOptions { Predicate = _ => f
 app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = _ => true  }).AllowAnonymous();
 
 app.Run();
+
+// Required for WebApplicationFactory<Program> in test projects
+public partial class Program { }

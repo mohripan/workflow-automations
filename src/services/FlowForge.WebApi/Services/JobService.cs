@@ -1,6 +1,7 @@
 using FlowForge.Domain.Enums;
 using FlowForge.Domain.Exceptions;
 using FlowForge.Domain.Repositories;
+using FlowForge.Infrastructure.Audit;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Contracts.Events;
 using FlowForge.WebApi.DTOs.Requests;
@@ -10,7 +11,8 @@ namespace FlowForge.WebApi.Services;
 
 public class JobService(
     IMessagePublisher publisher,
-    IAutomationRepository automationRepo) : IJobService
+    IAutomationRepository automationRepo,
+    IAuditLogger auditLogger) : IJobService
 {
     public async Task<PagedResult<JobResponse>> GetAllAsync(IJobRepository repo, JobQueryParams query, CancellationToken ct)
     {
@@ -76,6 +78,8 @@ public class JobService(
                 RequestedAt: DateTimeOffset.UtcNow
             ), ct: ct);
         }
+
+        await auditLogger.LogAsync("job.cancelled", id.ToString(), ct: ct);
     }
 
     public async Task RemoveAsync(IJobRepository repo, Guid id, CancellationToken ct)

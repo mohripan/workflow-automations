@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using FlowForge.Contracts.Events;
 using FlowForge.Domain.Entities;
@@ -5,6 +7,7 @@ using FlowForge.Domain.Exceptions;
 using FlowForge.Domain.Repositories;
 using FlowForge.Domain.Triggers;
 using FlowForge.Domain.ValueObjects;
+using FlowForge.Infrastructure.Audit;
 using FlowForge.Infrastructure.Caching;
 using FlowForge.Infrastructure.Encryption;
 using FlowForge.Infrastructure.Messaging.Outbox;
@@ -19,7 +22,8 @@ public class AutomationService(
     ITriggerTypeRegistry registry,
     IEncryptionService encryption,
     IOutboxWriter outboxWriter,
-    IRedisService redis) : IAutomationService
+    IRedisService redis,
+    IAuditLogger auditLogger) : IAutomationService
 {
     private static readonly JsonSerializerOptions _jsonOptions = new() { PropertyNameCaseInsensitive = true };
 
@@ -72,6 +76,7 @@ public class AutomationService(
         var snapshot = await MapToSnapshotAsync(automation, ct);
         await outboxWriter.WriteAsync(new AutomationChangedEvent(automation.Id, ChangeType.Created, snapshot), ct);
         await automationRepo.SaveAsync(automation, ct);
+        await auditLogger.LogAsync("automation.created", automation.Id.ToString(), new { automation.Name }, ct);
 
         return MapToResponse(automation);
     }
@@ -94,6 +99,7 @@ public class AutomationService(
         var snapshot = await MapToSnapshotAsync(automation, ct);
         await outboxWriter.WriteAsync(new AutomationChangedEvent(automation.Id, ChangeType.Updated, snapshot), ct);
         await automationRepo.SaveAsync(automation, ct);
+        await auditLogger.LogAsync("automation.updated", automation.Id.ToString(), new { automation.Name }, ct);
 
         return MapToResponse(automation);
     }
@@ -104,6 +110,7 @@ public class AutomationService(
             ?? throw new AutomationNotFoundException(id);
         await outboxWriter.WriteAsync(new AutomationChangedEvent(id, ChangeType.Deleted, null), ct);
         await automationRepo.DeleteAsync(automation, ct);
+        await auditLogger.LogAsync("automation.deleted", id.ToString(), new { automation.Name }, ct);
     }
 
     public async Task EnableAsync(Guid id, CancellationToken ct)
@@ -115,6 +122,7 @@ public class AutomationService(
         var snapshot = await MapToSnapshotAsync(automation, ct);
         await outboxWriter.WriteAsync(new AutomationChangedEvent(automation.Id, ChangeType.Updated, snapshot), ct);
         await automationRepo.SaveAsync(automation, ct);
+        await auditLogger.LogAsync("automation.enabled", id.ToString(), ct: ct);
     }
 
     public async Task DisableAsync(Guid id, CancellationToken ct)
@@ -126,9 +134,10 @@ public class AutomationService(
         var snapshot = await MapToSnapshotAsync(automation, ct);
         await outboxWriter.WriteAsync(new AutomationChangedEvent(automation.Id, ChangeType.Updated, snapshot), ct);
         await automationRepo.SaveAsync(automation, ct);
+        await auditLogger.LogAsync("automation.disabled", id.ToString(), ct: ct);
     }
 
-    public async Task FireWebhookAsync(Guid id, string? secret, CancellationToken ct)
+    public async Task FireWebhookAsync(Guid id, string? rawBody, string? signatureHeader, CancellationToken ct)
     {
         var automation = await automationRepo.GetByIdAsync(id, ct)
             ?? throw new AutomationNotFoundException(id);
@@ -140,12 +149,23 @@ public class AutomationService(
             ?? throw new InvalidAutomationException("Automation does not have a webhook trigger.");
 
         var config = JsonSerializer.Deserialize<WebhookTriggerConfig>(webhookTrigger.ConfigJson);
-        if (!string.IsNullOrEmpty(config?.SecretHash))
+        if (!string.IsNullOrEmpty(config?.Secret))
         {
-            if (string.IsNullOrEmpty(secret))
+            const string prefix = "sha256=";
+
+            if (string.IsNullOrEmpty(signatureHeader) || !signatureHeader.StartsWith(prefix))
                 throw new UnauthorizedWebhookException(id);
 
-            if (!BCrypt.Net.BCrypt.Verify(secret, config.SecretHash))
+            byte[] expected;
+            try { expected = Convert.FromHexString(signatureHeader[prefix.Length..]); }
+            catch (FormatException) { throw new UnauthorizedWebhookException(id); }
+
+            var decryptedSecret = encryption.Decrypt(config.Secret);
+            var secretBytes     = Encoding.UTF8.GetBytes(decryptedSecret);
+            var bodyBytes       = Encoding.UTF8.GetBytes(rawBody ?? string.Empty);
+            var computed        = HMACSHA256.HashData(secretBytes, bodyBytes);
+
+            if (!CryptographicOperations.FixedTimeEquals(computed, expected))
                 throw new UnauthorizedWebhookException(id);
         }
 
@@ -289,5 +309,5 @@ public class AutomationService(
         Nodes: r.Nodes?.Select(MapConditionNode).ToList()
     );
 
-    private record WebhookTriggerConfig(string? SecretHash);
+    private record WebhookTriggerConfig(string? Secret);
 }

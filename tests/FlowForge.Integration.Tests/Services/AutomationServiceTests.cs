@@ -2,6 +2,7 @@ using FlowForge.Domain.Entities;
 using FlowForge.Domain.Exceptions;
 using FlowForge.Domain.Repositories;
 using FlowForge.Domain.ValueObjects;
+using FlowForge.Infrastructure.Audit;
 using FlowForge.Infrastructure.Caching;
 using FlowForge.Infrastructure.Encryption;
 using FlowForge.Infrastructure.Messaging.Outbox;
@@ -18,6 +19,8 @@ using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace FlowForge.Integration.Tests.Services;
@@ -47,14 +50,14 @@ public class AutomationServiceTests : IAsyncLifetime
     // ── FireWebhookAsync ──────────────────────────────────────────────────────
 
     [Fact]
-    public async Task FireWebhook_NoSecretConfigured_AllowsWithoutProvidingSecret()
+    public async Task FireWebhook_NoSecretConfigured_AllowsWithoutSignature()
     {
         // Arrange — automation with webhook trigger that has no secret
-        var (automation, redis) = await SeedWebhookAutomationAsync(secretHash: null);
+        var (automation, redis) = await SeedWebhookAutomationAsync(plainSecret: null);
         var sut = BuildService(redis);
 
         // Act
-        var act = async () => await sut.FireWebhookAsync(automation.Id, secret: null, CancellationToken.None);
+        var act = async () => await sut.FireWebhookAsync(automation.Id, rawBody: null, signatureHeader: null, CancellationToken.None);
 
         // Assert — no exception, Redis flag is set
         await act.Should().NotThrowAsync();
@@ -63,16 +66,21 @@ public class AutomationServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task FireWebhook_WithCorrectSecret_SetsRedisFlag()
+    public async Task FireWebhook_WithCorrectHmacSignature_SetsRedisFlag()
     {
         // Arrange
         const string plainSecret = "my-secret";
-        var hash = BCrypt.Net.BCrypt.HashPassword(plainSecret);
-        var (automation, redis) = await SeedWebhookAutomationAsync(secretHash: hash);
+        const string rawBody     = """{"event":"push"}""";
+        var (automation, redis) = await SeedWebhookAutomationAsync(plainSecret);
         var sut = BuildService(redis);
 
+        var expectedHmac = HMACSHA256.HashData(
+            Encoding.UTF8.GetBytes(plainSecret),
+            Encoding.UTF8.GetBytes(rawBody));
+        var signature = "sha256=" + Convert.ToHexString(expectedHmac);
+
         // Act
-        var act = async () => await sut.FireWebhookAsync(automation.Id, secret: plainSecret, CancellationToken.None);
+        var act = async () => await sut.FireWebhookAsync(automation.Id, rawBody, signature, CancellationToken.None);
 
         await act.Should().NotThrowAsync();
         var flag = await redis.GetAsync($"trigger:webhook:{automation.Triggers[0].Id}:fired");
@@ -80,29 +88,32 @@ public class AutomationServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task FireWebhook_WithWrongSecret_ThrowsUnauthorizedWebhookException()
+    public async Task FireWebhook_WithWrongHmacSignature_ThrowsUnauthorizedWebhookException()
     {
         // Arrange
-        var hash = BCrypt.Net.BCrypt.HashPassword("correct-secret");
-        var (automation, redis) = await SeedWebhookAutomationAsync(secretHash: hash);
+        var (automation, redis) = await SeedWebhookAutomationAsync("correct-secret");
         var sut = BuildService(redis);
 
+        var wrongHmac = HMACSHA256.HashData(
+            Encoding.UTF8.GetBytes("wrong-secret"),
+            Encoding.UTF8.GetBytes("{}"));
+        var signature = "sha256=" + Convert.ToHexString(wrongHmac);
+
         // Act
-        var act = async () => await sut.FireWebhookAsync(automation.Id, secret: "wrong-secret", CancellationToken.None);
+        var act = async () => await sut.FireWebhookAsync(automation.Id, "{}", signature, CancellationToken.None);
 
         await act.Should().ThrowAsync<UnauthorizedWebhookException>();
     }
 
     [Fact]
-    public async Task FireWebhook_SecretConfiguredButNoneProvided_ThrowsUnauthorizedWebhookException()
+    public async Task FireWebhook_SecretConfiguredButNoSignatureProvided_ThrowsUnauthorizedWebhookException()
     {
         // Arrange
-        var hash = BCrypt.Net.BCrypt.HashPassword("some-secret");
-        var (automation, redis) = await SeedWebhookAutomationAsync(secretHash: hash);
+        var (automation, redis) = await SeedWebhookAutomationAsync("some-secret");
         var sut = BuildService(redis);
 
-        // Act
-        var act = async () => await sut.FireWebhookAsync(automation.Id, secret: null, CancellationToken.None);
+        // Act — no signature header
+        var act = async () => await sut.FireWebhookAsync(automation.Id, "{}", signatureHeader: null, CancellationToken.None);
 
         await act.Should().ThrowAsync<UnauthorizedWebhookException>();
     }
@@ -111,13 +122,13 @@ public class AutomationServiceTests : IAsyncLifetime
     public async Task FireWebhook_WhenAutomationDisabled_ThrowsInvalidAutomationException()
     {
         // Arrange
-        var (automation, redis) = await SeedWebhookAutomationAsync(secretHash: null);
+        var (automation, redis) = await SeedWebhookAutomationAsync(plainSecret: null);
         automation.Disable();
         await _db.SaveChangesAsync();
         var sut = BuildService(redis);
 
         // Act
-        var act = async () => await sut.FireWebhookAsync(automation.Id, secret: null, CancellationToken.None);
+        var act = async () => await sut.FireWebhookAsync(automation.Id, rawBody: null, signatureHeader: null, CancellationToken.None);
 
         await act.Should().ThrowAsync<InvalidAutomationException>()
             .WithMessage("*disabled*");
@@ -195,9 +206,11 @@ public class AutomationServiceTests : IAsyncLifetime
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private async Task<(Automation automation, IRedisService redis)> SeedWebhookAutomationAsync(string? secretHash)
+    private async Task<(Automation automation, IRedisService redis)> SeedWebhookAutomationAsync(string? plainSecret)
     {
-        var configJson = JsonSerializer.Serialize(new { SecretHash = secretHash });
+        // AesEncryptionService has a plain-text pass-through in Decrypt(), so we can store
+        // the plaintext secret directly when using the pass-through encryption stub.
+        var configJson = JsonSerializer.Serialize(new { Secret = plainSecret });
         var trigger = Trigger.Create("webhook", "webhook", configJson);
 
         var hostGroup = HostGroup.Create("HG", "conn-webhook");
@@ -226,8 +239,9 @@ public class AutomationServiceTests : IAsyncLifetime
     private AutomationService BuildService(IRedisService redis)
     {
         var automationRepo = new AutomationRepository(_db);
-        var hostGroupRepo = new HostGroupRepository(_db);
-        var outboxWriter = new OutboxWriter(_db);
+        var hostGroupRepo  = new HostGroupRepository(_db);
+        var outboxWriter   = new OutboxWriter(_db);
+        var auditLogger    = Substitute.For<IAuditLogger>();
 
         var registry = new TriggerTypeRegistry();
         registry.Register(new ScheduleTriggerDescriptor());
@@ -242,14 +256,15 @@ public class AutomationServiceTests : IAsyncLifetime
         encryption.Decrypt(Arg.Any<string>()).Returns(ci => ci.Arg<string>());
         encryption.IsEncrypted(Arg.Any<string>()).Returns(false);
 
-        return new AutomationService(automationRepo, hostGroupRepo, registry, encryption, outboxWriter, redis);
+        return new AutomationService(automationRepo, hostGroupRepo, registry, encryption, outboxWriter, redis, auditLogger);
     }
 
     private AutomationService BuildServiceWithRealEncryption(IRedisService redis)
     {
         var automationRepo = new AutomationRepository(_db);
-        var hostGroupRepo = new HostGroupRepository(_db);
-        var outboxWriter = new OutboxWriter(_db);
+        var hostGroupRepo  = new HostGroupRepository(_db);
+        var outboxWriter   = new OutboxWriter(_db);
+        var auditLogger    = Substitute.For<IAuditLogger>();
 
         var registry = new TriggerTypeRegistry();
         registry.Register(new ScheduleTriggerDescriptor());
@@ -266,6 +281,6 @@ public class AutomationServiceTests : IAsyncLifetime
             .Build();
         var encryption = new AesEncryptionService(config, NullLogger<AesEncryptionService>.Instance);
 
-        return new AutomationService(automationRepo, hostGroupRepo, registry, encryption, outboxWriter, redis);
+        return new AutomationService(automationRepo, hostGroupRepo, registry, encryption, outboxWriter, redis, auditLogger);
     }
 }

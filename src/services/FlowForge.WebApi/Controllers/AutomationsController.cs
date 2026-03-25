@@ -2,6 +2,8 @@ using FlowForge.WebApi.DTOs.Requests;
 using FlowForge.WebApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using System.IO;
 
 namespace FlowForge.WebApi.Controllers;
 
@@ -68,12 +70,16 @@ public class AutomationsController(
 
     [HttpPost("{id:guid}/webhook")]
     [AllowAnonymous]
-    public async Task<IActionResult> FireWebhook(
-        Guid id,
-        [FromHeader(Name = "X-Webhook-Secret")] string? secret,
-        CancellationToken ct)
+    [EnableRateLimiting("webhook")]
+    public async Task<IActionResult> FireWebhook(Guid id, CancellationToken ct)
     {
-        await automationService.FireWebhookAsync(id, secret, ct);
+        Request.EnableBuffering();
+        using var reader = new StreamReader(Request.Body, leaveOpen: true);
+        var rawBody = await reader.ReadToEndAsync(ct);
+
+        var signature = Request.Headers["X-FlowForge-Signature"].FirstOrDefault();
+
+        await automationService.FireWebhookAsync(id, rawBody, signature, ct);
         return Accepted();
     }
 

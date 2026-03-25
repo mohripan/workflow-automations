@@ -1,4 +1,6 @@
+using FlowForge.Infrastructure.Audit;
 using FlowForge.Infrastructure.Auth;
+using Microsoft.AspNetCore.Authentication;
 using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.DeadLetter;
@@ -67,6 +69,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAutomationRepository, AutomationRepository>();
         services.AddScoped<IHostGroupRepository, HostGroupRepository>();
         services.AddScoped<IWorkflowHostRepository, WorkflowHostRepository>();
+        services.AddScoped<IAuditLogRepository, AuditLogRepository>();
 
         // Multi-DB Job Repositories
         var jobConnections = config.GetSection("JobConnections").Get<Dictionary<string, JobConnectionConfig>>() ?? [];
@@ -80,6 +83,17 @@ public static class ServiceCollectionExtensions
                 return new JobRepository(new JobsDbContext(optionsBuilder.Options));
             });
         }
+        return services;
+    }
+
+    /// <summary>
+    /// Registers <see cref="ICurrentUserService"/> and <see cref="IAuditLogger"/>.
+    /// Call <c>AddHttpContextAccessor()</c> before this in the WebApi host.
+    /// </summary>
+    public static IServiceCollection AddAuditLogging(this IServiceCollection services)
+    {
+        services.AddScoped<ICurrentUserService, HttpContextCurrentUserService>();
+        services.AddScoped<IAuditLogger, AuditLogger>();
         return services;
     }
 

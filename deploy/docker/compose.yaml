@@ -146,6 +146,21 @@ services:
       retries: 10
       start_period: 60s
 
+  caddy:
+    image: caddy:2
+    container_name: flowforge-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      webapi:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+
   # ── Application Services ───────────────────────────────────────────────────
 
   webapi:
@@ -294,3 +309,4 @@ volumes:
   flowforge-db-titan-data:
   flowforge-db-quartz-data:
   flowforge-db-erp-test-data:
+  caddy_data:

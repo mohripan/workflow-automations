@@ -10,7 +10,7 @@ public class WebhookTriggerDescriptor : ITriggerTypeDescriptor
     public string DisplayName => "Webhook";
     public string? Description =>
         "Fires when an external system POSTs to /api/automations/{id}/webhook. " +
-        "Optionally validates a shared secret header.";
+        "Optionally validates an HMAC-SHA256 signature in the X-FlowForge-Signature header.";
 
     public TriggerConfigSchema GetSchema() => new(
         TypeId: TypeId,
@@ -19,15 +19,22 @@ public class WebhookTriggerDescriptor : ITriggerTypeDescriptor
         Fields:
         [
             new ConfigField(
-                Name: "secretHash",
+                Name: "secret",
                 Label: "Webhook Secret (optional)",
                 DataType: ConfigFieldType.String,
                 Required: false,
-                Description: "BCrypt hash of the secret value that callers must pass in the X-Webhook-Secret header. " +
+                Description: "Shared secret used to verify the HMAC-SHA256 signature sent in the " +
+                             "X-FlowForge-Signature header. Stored encrypted at rest. " +
                              "Leave blank to accept unauthenticated webhooks.",
                 DefaultValue: null,
                 EnumValues: null)
         ]);
+
+    /// <summary>
+    /// Marks <c>secret</c> as sensitive so the service layer encrypts it at rest
+    /// and redacts it in API responses.
+    /// </summary>
+    public IReadOnlyList<string> GetSensitiveFieldNames() => ["secret"];
 
     public IReadOnlyList<string> ValidateConfig(string configJson)
     {
@@ -36,5 +43,5 @@ public class WebhookTriggerDescriptor : ITriggerTypeDescriptor
         return [];
     }
 
-    private record WebhookTriggerConfig(string? SecretHash);
+    private record WebhookTriggerConfig(string? Secret);
 }

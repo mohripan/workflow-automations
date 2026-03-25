@@ -13,6 +13,6 @@ public interface IAutomationService
     Task DeleteAsync(Guid id, CancellationToken ct);
     Task EnableAsync(Guid id, CancellationToken ct);
     Task DisableAsync(Guid id, CancellationToken ct);
-    Task FireWebhookAsync(Guid id, string? secret, CancellationToken ct);
+    Task FireWebhookAsync(Guid id, string? rawBody, string? signatureHeader, CancellationToken ct);
     Task<IReadOnlyList<AutomationSnapshot>> GetAllSnapshotsAsync(CancellationToken ct);
 }
