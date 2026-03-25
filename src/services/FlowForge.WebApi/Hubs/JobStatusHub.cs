@@ -1,4 +1,5 @@
 using FlowForge.WebApi.DTOs.Responses;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 
 namespace FlowForge.WebApi.Hubs;
@@ -8,6 +9,7 @@ public interface IJobStatusClient
     Task OnJobStatusChanged(JobStatusUpdate update);
 }
 
+[Authorize]
 public class JobStatusHub : Hub<IJobStatusClient>
 {
     public async Task SubscribeToJob(Guid jobId)

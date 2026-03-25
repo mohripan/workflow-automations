@@ -1,10 +1,12 @@
 using FlowForge.Domain.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace FlowForge.WebApi.Controllers;
 
 [ApiController]
 [Route("api/task-types")]
+[AllowAnonymous]
 public class TaskTypesController(
     ITaskTypeRegistry registry,
     ILogger<TaskTypesController> logger) : ControllerBase

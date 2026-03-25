@@ -3,6 +3,7 @@ using FlowForge.Domain.Repositories;
 using FlowForge.WebApi.DTOs.Requests;
 using FlowForge.WebApi.DTOs.Responses;
 using FlowForge.WebApi.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace FlowForge.WebApi.Controllers;
@@ -15,6 +16,7 @@ public class JobsController(IServiceProvider serviceProvider, IJobService jobSer
         => serviceProvider.GetRequiredKeyedService<IJobRepository>(connectionId);
 
     [HttpGet]
+    [Authorize(Policy = "ViewerOrAbove")]
     public async Task<IActionResult> GetAll(string connectionId, [FromQuery] JobQueryParams query, CancellationToken ct)
     {
         var repo = GetRepo(connectionId);
@@ -23,6 +25,7 @@ public class JobsController(IServiceProvider serviceProvider, IJobService jobSer
     }
 
     [HttpGet("{id:guid}")]
+    [Authorize(Policy = "ViewerOrAbove")]
     public async Task<IActionResult> GetById(string connectionId, Guid id, CancellationToken ct)
     {
         var repo = GetRepo(connectionId);
@@ -31,6 +34,7 @@ public class JobsController(IServiceProvider serviceProvider, IJobService jobSer
     }
 
     [HttpPost("{id:guid}/cancel")]
+    [Authorize(Policy = "OperatorOrAbove")]
     public async Task<IActionResult> Cancel(string connectionId, Guid id, CancellationToken ct)
     {
         var repo = GetRepo(connectionId);
@@ -39,6 +43,7 @@ public class JobsController(IServiceProvider serviceProvider, IJobService jobSer
     }
 
     [HttpDelete("{id:guid}")]
+    [Authorize(Policy = "AdminOnly")]
     public async Task<IActionResult> Remove(string connectionId, Guid id, CancellationToken ct)
     {
         var repo = GetRepo(connectionId);

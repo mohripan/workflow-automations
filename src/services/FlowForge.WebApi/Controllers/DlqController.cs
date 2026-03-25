@@ -1,4 +1,5 @@
 using FlowForge.Infrastructure.Messaging.Redis;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using StackExchange.Redis;
 
@@ -15,6 +16,7 @@ public record DlqEntryResponse(
 
 [ApiController]
 [Route("api/dlq")]
+[Authorize(Policy = "AdminOnly")]
 public class DlqController(
     IConnectionMultiplexer redis,
     ILogger<DlqController> logger) : ControllerBase

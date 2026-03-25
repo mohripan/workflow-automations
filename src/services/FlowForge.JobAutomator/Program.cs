@@ -1,4 +1,5 @@
 using FlowForge.Infrastructure;
+using FlowForge.Infrastructure.Auth;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.Infrastructure.Telemetry;
@@ -21,9 +22,13 @@ builder.Services.AddRedis(builder.Configuration);
 builder.Services.AddEncryption();
 builder.Services.AddFlowForgeTelemetry(builder.Configuration, "JobAutomator");
 
-// HTTP client for one-time startup snapshot
+// Client-credentials token handler (M2M auth against WebApi)
+builder.Services.AddKeycloakClientCredentials(builder.Configuration);
+
+// HTTP client for one-time startup snapshot — token is attached automatically
 builder.Services.AddHttpClient<IAutomationApiClient, AutomationApiClient>(client =>
-    client.BaseAddress = new Uri(builder.Configuration["WebApi:BaseUrl"] ?? "http://localhost:5015"));
+    client.BaseAddress = new Uri(builder.Configuration["WebApi:BaseUrl"] ?? "http://localhost:5015"))
+    .AddHttpMessageHandler<ClientCredentialsHandler>();
 
 // In-memory cache (singleton)
 builder.Services.AddSingleton<AutomationCache>();

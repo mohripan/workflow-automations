@@ -1,3 +1,4 @@
+using FlowForge.Infrastructure.Auth;
 using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.DeadLetter;
@@ -79,6 +80,19 @@ public static class ServiceCollectionExtensions
                 return new JobRepository(new JobsDbContext(optionsBuilder.Options));
             });
         }
+        return services;
+    }
+
+    /// <summary>
+    /// Registers <see cref="KeycloakClientOptions"/> and <see cref="ClientCredentialsHandler"/>
+    /// so callers can attach the handler to any named or typed HttpClient.
+    /// </summary>
+    public static IServiceCollection AddKeycloakClientCredentials(
+        this IServiceCollection services, IConfiguration config)
+    {
+        services.Configure<KeycloakClientOptions>(
+            config.GetSection(KeycloakClientOptions.SectionName));
+        services.AddTransient<ClientCredentialsHandler>();
         return services;
     }
 

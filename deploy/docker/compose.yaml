@@ -2,7 +2,7 @@ services:
 
   # ── Infrastructure ─────────────────────────────────────────────────────────
 
-  # Platform database: Automations, HostGroups, WorkflowHosts
+  # Platform database: Automations, HostGroups, WorkflowHosts + Keycloak schema
   postgres-platform:
     image: postgres:17-alpine
     container_name: flowforge-db-platform
@@ -14,6 +14,7 @@ services:
       - "5432:5432"
     volumes:
       - flowforge-db-platform-data:/var/lib/postgresql/data
+      - ./create-keycloak-db.sql:/docker-entrypoint-initdb.d/create-keycloak-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -120,6 +121,31 @@ services:
       - "16686:16686"  # Jaeger UI
       - "4317:4317"    # OTLP gRPC
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.2
+    container_name: flowforge-keycloak
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres-platform:5432/keycloak
+      KC_DB_USERNAME: postgres
+      KC_DB_PASSWORD: postgres
+    ports:
+      - "8180:8080"
+    volumes:
+      - ./keycloak/flowforge-realm.json:/opt/keycloak/data/import/flowforge-realm.json:ro
+    depends_on:
+      postgres-platform:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
   # ── Application Services ───────────────────────────────────────────────────
 
   webapi:
@@ -170,12 +196,17 @@ services:
       Redis__ConnectionString: "redis:6379"
       OpenTelemetry__OtlpEndpoint: "http://jaeger:4317"
       WebApi__BaseUrl: "http://flowforge-webapi:8080"
+      Keycloak__Authority: "http://keycloak:8080/realms/flowforge"
+      Keycloak__ClientId: "flowforge-jobautomator"
+      Keycloak__ClientSecret: "flowforge-jobautomator-secret"
     depends_on:
       postgres-quartz:
         condition: service_healthy
       redis:
         condition: service_healthy
       webapi:
+        condition: service_healthy
+      keycloak:
         condition: service_healthy
 
   job-orchestrator:
