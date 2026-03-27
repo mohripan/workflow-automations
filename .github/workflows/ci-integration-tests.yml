@@ -1,0 +1,78 @@
+name: Integration Tests (Nightly)
+
+on:
+  schedule:
+    # Runs every day at 02:00 UTC
+    - cron: '0 2 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'tests/FlowForge.Integration.Tests/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # Testcontainers spins up its own PostgreSQL and Redis containers via Docker.
+      # The Docker daemon is already available on ubuntu-latest runners.
+      - name: Restore dependencies
+        run: dotnet restore tests/FlowForge.Integration.Tests/FlowForge.Integration.Tests.csproj
+
+      - name: Build
+        run: >
+          dotnet build tests/FlowForge.Integration.Tests/FlowForge.Integration.Tests.csproj
+          --no-restore
+          --configuration Release
+
+      - name: Run integration tests
+        env:
+          PYTHON_PATH: python3
+          FlowForge__EncryptionKey: dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXRlc3Q=
+        run: >
+          dotnet test tests/FlowForge.Integration.Tests/FlowForge.Integration.Tests.csproj
+          --no-build
+          --configuration Release
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory ./test-results
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results-${{ github.run_id }}
+          path: ./test-results/*.trx
+          retention-days: 30
+
+      - name: Notify on failure
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Nightly integration tests failed — ${new Date().toISOString().slice(0,10)}`,
+              body: `The nightly integration test run failed.\n\n**Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`,
+              labels: ['ci-failure', 'integration-tests']
+            });

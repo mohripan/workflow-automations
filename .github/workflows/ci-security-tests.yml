@@ -1,0 +1,96 @@
+name: Unit Tests — Security
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/services/FlowForge.WebApi/**'
+      - 'src/shared/FlowForge.Infrastructure/**'
+      - 'src/shared/FlowForge.Domain/**'
+      - 'src/shared/FlowForge.Contracts/**'
+      - 'tests/FlowForge.Security.Tests/**'
+  push:
+    branches: [main]
+    paths:
+      - 'src/services/FlowForge.WebApi/**'
+      - 'src/shared/FlowForge.Infrastructure/**'
+      - 'src/shared/FlowForge.Domain/**'
+      - 'src/shared/FlowForge.Contracts/**'
+      - 'tests/FlowForge.Security.Tests/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-tests:
+    name: Security Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: flowforge
+          POSTGRES_PASSWORD: flowforge
+          POSTGRES_DB: flowforge_platform_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ConnectionStrings__Platform: >-
+        Host=localhost;Port=5432;Database=flowforge_platform_test;Username=flowforge;Password=flowforge
+      ConnectionStrings__Redis: localhost:6379
+      FlowForge__EncryptionKey: dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXRlc3Q=
+      Keycloak__Authority: http://localhost:8080/realms/flowforge
+      Keycloak__Audience: flowforge-api
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore tests/FlowForge.Security.Tests/FlowForge.Security.Tests.csproj
+
+      - name: Build
+        run: >
+          dotnet build tests/FlowForge.Security.Tests/FlowForge.Security.Tests.csproj
+          --no-restore
+          --configuration Release
+
+      - name: Run security tests
+        run: >
+          dotnet test tests/FlowForge.Security.Tests/FlowForge.Security.Tests.csproj
+          --no-build
+          --configuration Release
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory ./test-results
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-test-results
+          path: ./test-results/*.trx
+          retention-days: 7

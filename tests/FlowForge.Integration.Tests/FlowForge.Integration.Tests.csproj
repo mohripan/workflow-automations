@@ -32,6 +32,7 @@
     <ProjectReference Include="..\..\src\shared\FlowForge.Infrastructure\FlowForge.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\services\FlowForge.WebApi\FlowForge.WebApi.csproj" />
     <ProjectReference Include="..\..\src\services\FlowForge.JobAutomator\FlowForge.JobAutomator.csproj" />
+    <ProjectReference Include="..\..\src\services\FlowForge.JobOrchestrator\FlowForge.JobOrchestrator.csproj" />
   </ItemGroup>
 
 </Project>

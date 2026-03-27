@@ -1,0 +1,61 @@
+name: Unit Tests — Domain
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/shared/FlowForge.Domain/**'
+      - 'src/shared/FlowForge.Contracts/**'
+      - 'src/services/FlowForge.JobAutomator/**'
+      - 'tests/FlowForge.Domain.Tests/**'
+  push:
+    branches: [main]
+    paths:
+      - 'src/shared/FlowForge.Domain/**'
+      - 'src/shared/FlowForge.Contracts/**'
+      - 'src/services/FlowForge.JobAutomator/**'
+      - 'tests/FlowForge.Domain.Tests/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests-domain:
+    name: Domain Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore tests/FlowForge.Domain.Tests/FlowForge.Domain.Tests.csproj
+
+      - name: Build
+        run: >
+          dotnet build tests/FlowForge.Domain.Tests/FlowForge.Domain.Tests.csproj
+          --no-restore
+          --configuration Release
+
+      - name: Run domain unit tests
+        run: >
+          dotnet test tests/FlowForge.Domain.Tests/FlowForge.Domain.Tests.csproj
+          --no-build
+          --configuration Release
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory ./test-results
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: domain-test-results
+          path: ./test-results/*.trx
+          retention-days: 7
