@@ -18,7 +18,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls("http://+:8080");
 
 // Shared Infrastructure (Redis, etc.)
-builder.Services.AddRedis(builder.Configuration);
+builder.Services.AddRedis();
 builder.Services.AddEncryption();
 builder.Services.AddFlowForgeTelemetry(builder.Configuration, "JobAutomator");
 

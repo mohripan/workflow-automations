@@ -21,7 +21,7 @@ public class AuditLogTests(TestWebAppFactory factory) : IAsyncLifetime
     public async Task InitializeAsync()
     {
         await using var db = factory.CreateDbContext();
-        var hostGroup = HostGroup.Create("Audit-HG", "audit-conn");
+        var hostGroup = HostGroup.Create("Audit-HG", $"audit-{Guid.NewGuid():N}");
         await db.HostGroups.AddAsync(hostGroup);
         await db.SaveChangesAsync();
         _hostGroupId = hostGroup.Id;
@@ -42,7 +42,7 @@ public class AuditLogTests(TestWebAppFactory factory) : IAsyncLifetime
             Description:      null,
             HostGroupId:      _hostGroupId,
             TaskId:           "run-script",
-            Triggers:         [new CreateTriggerRequest("sched", "schedule", """{"cron":"0 * * * *","timezone":"UTC"}""")],
+            Triggers:         [new CreateTriggerRequest("sched", "schedule", """{"cronExpression":"0 * * * * ?"}""")],
             TriggerCondition: new TriggerConditionRequest(null, "sched", null));
 
         var createResponse = await adminClient.PostAsJsonAsync("/api/automations", request);
@@ -74,7 +74,7 @@ public class AuditLogTests(TestWebAppFactory factory) : IAsyncLifetime
             Description:      null,
             HostGroupId:      _hostGroupId,
             TaskId:           "run-script",
-            Triggers:         [new CreateTriggerRequest("sched", "schedule", """{"cron":"0 * * * *","timezone":"UTC"}""")],
+            Triggers:         [new CreateTriggerRequest("sched", "schedule", """{"cronExpression":"0 * * * * ?"}""")],
             TriggerCondition: new TriggerConditionRequest(null, "sched", null));
 
         var createResp = await adminClient.PostAsJsonAsync("/api/automations", createRequest);
@@ -88,7 +88,7 @@ public class AuditLogTests(TestWebAppFactory factory) : IAsyncLifetime
             Description:      "Now with description",
             HostGroupId:      _hostGroupId,
             TaskId:           "run-script",
-            Triggers:         [new CreateTriggerRequest("sched", "schedule", """{"cron":"0 * * * *","timezone":"UTC"}""")],
+            Triggers:         [new CreateTriggerRequest("sched", "schedule", """{"cronExpression":"0 * * * * ?"}""")],
             TriggerCondition: new TriggerConditionRequest(null, "sched", null));
 
         var updateResp = await adminClient.PutAsJsonAsync($"/api/automations/{createdId}", updateRequest);
@@ -115,7 +115,7 @@ public class AuditLogTests(TestWebAppFactory factory) : IAsyncLifetime
             Description:      null,
             HostGroupId:      _hostGroupId,
             TaskId:           "run-script",
-            Triggers:         [new CreateTriggerRequest("sched", "schedule", """{"cron":"0 * * * *","timezone":"UTC"}""")],
+            Triggers:         [new CreateTriggerRequest("sched", "schedule", """{"cronExpression":"0 * * * * ?"}""")],
             TriggerCondition: new TriggerConditionRequest(null, "sched", null));
 
         var createResp = await adminClient.PostAsJsonAsync("/api/automations", createRequest);

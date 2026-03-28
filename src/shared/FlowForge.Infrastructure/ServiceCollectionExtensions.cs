@@ -30,7 +30,7 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration config, string? serviceName = null)
     {
-        services.AddRedis(config);
+        services.AddRedis();
         services.AddPersistence(config);
         services.AddTriggerTypeRegistry();
         services.AddTaskTypeRegistry();
@@ -46,11 +46,17 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    public static IServiceCollection AddRedis(this IServiceCollection services, IConfiguration config)
+    public static IServiceCollection AddRedis(this IServiceCollection services)
     {
-        var redisConnString = config.GetSection("Redis:ConnectionString").Value
-            ?? throw new ArgumentNullException("Redis:ConnectionString");
-        services.AddSingleton<IConnectionMultiplexer>(ConnectionMultiplexer.Connect(redisConnString));
+        // Register lazily so the connection string is resolved from IConfiguration
+        // at first use — this allows test hosts to override "Redis:ConnectionString"
+        // via ConfigureAppConfiguration before the multiplexer is created.
+        services.AddSingleton<IConnectionMultiplexer>(sp =>
+        {
+            var connStr = sp.GetRequiredService<IConfiguration>().GetSection("Redis:ConnectionString").Value
+                ?? throw new ArgumentNullException("Redis:ConnectionString");
+            return ConnectionMultiplexer.Connect(connStr);
+        });
         services.AddSingleton<IMessagePublisher, RedisStreamPublisher>();
         services.AddSingleton<IMessageConsumer, RedisStreamConsumer>();
         services.AddSingleton<IStreamBootstrapper, RedisStreamBootstrapper>();

@@ -273,6 +273,12 @@ public class CronJobAutomationE2ETests : IAsyncLifetime
         cache.Remove(automation.Id);
         _platformDb.Automations.Remove(automation);
         _platformDb.HostGroups.Remove(hostGroup);
+
+        // Remove all outbox messages so subsequent tests in the same collection
+        // do not find stale committed rows when querying by event type.
+        var outboxToClean = await _platformDb.OutboxMessages.ToListAsync();
+        _platformDb.OutboxMessages.RemoveRange(outboxToClean);
+
         await _platformDb.SaveChangesAsync();
 
         (await _platformDb.Automations.FindAsync(automation.Id))
@@ -380,8 +386,8 @@ public class CronJobAutomationE2ETests : IAsyncLifetime
 
         // Exit code 1 = Error; 0 = Completed or Cancelled.
         // We allow both — the consumer will check the actual job status.
-        // Fail loudly only on unexpected exit codes > 1 or if stderr shows an unhandled crash.
-        if (process.ExitCode > 1)
+        // Fail loudly on unexpected exit codes (negative = unhandled crash, >1 = unknown).
+        if (process.ExitCode is not (0 or 1))
             throw new Exception(
                 $"WorkflowEngine exited with unexpected code {process.ExitCode}.\nStdout: {stdout}\nStderr: {stderr}");
     }

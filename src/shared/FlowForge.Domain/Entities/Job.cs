@@ -74,6 +74,7 @@ public class Job : BaseEntity<Guid>
             (JobStatus.Pending, JobStatus.Removed) => true,
             (JobStatus.Started, JobStatus.InProgress) => true,
             (JobStatus.InProgress, JobStatus.Completed) => true,
+            (JobStatus.InProgress, JobStatus.CompletedUnsuccessfully) => true,
             (JobStatus.InProgress, JobStatus.Error) => true,
             (JobStatus.InProgress, JobStatus.Cancel) => true,
             (JobStatus.Started, JobStatus.Cancel) => true,

@@ -15,6 +15,9 @@ public class WebhookRateLimitTests(TestWebAppFactory factory)
     public async Task WebhookEndpoint_BurstOver30Requests_EventuallyReturns429()
     {
         var client = factory.CreateAnonymousClient();
+        // Use a dedicated test IP so this test's traffic does not exhaust the "unknown"
+        // partition used by WebhookSignatureTests (TestServer has no real RemoteIpAddress).
+        client.DefaultRequestHeaders.Add("X-Test-Client-IP", "10.0.0.1");
         var id     = Guid.NewGuid(); // automation doesn't need to exist — rate limiter fires first
 
         var statusCodes = new List<HttpStatusCode>();
@@ -34,6 +37,8 @@ public class WebhookRateLimitTests(TestWebAppFactory factory)
     public async Task WebhookEndpoint_WhenRateLimited_IncludesRetryAfterHeader()
     {
         var client = factory.CreateAnonymousClient();
+        // Use a distinct IP from BurstOver30Requests so window-reset timing doesn't matter.
+        client.DefaultRequestHeaders.Add("X-Test-Client-IP", "10.0.0.2");
         var id     = Guid.NewGuid();
 
         HttpResponseMessage? tooManyResponse = null;
@@ -55,7 +60,7 @@ public class WebhookRateLimitTests(TestWebAppFactory factory)
     {
         // The global limiter applies 300 req/min per user sub claim.
         // 350 requests from the same token should trigger it.
-        var client = factory.CreateViewerClient();
+        var client = factory.CreateClientWithToken(TestTokenFactory.ForViewer($"ratelimit-viewer-{Guid.NewGuid():N}"));
 
         var statusCodes = new List<HttpStatusCode>();
 

@@ -1,9 +1,14 @@
 using FlowForge.Infrastructure.Persistence.Platform;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
 using Testcontainers.PostgreSql;
 using Testcontainers.Redis;
@@ -24,6 +29,13 @@ public class TestWebAppFactory : WebApplicationFactory<Program>, IAsyncLifetime
     public async Task InitializeAsync()
     {
         await Task.WhenAll(_pg.StartAsync(), _redis.StartAsync());
+
+        // Apply migrations before any test can seed data directly via CreateDbContext().
+        // The WebApi host runs migrations on startup too, but the host is lazy — it only
+        // builds when CreateClient() is first called. Some tests seed via CreateDbContext()
+        // before that, so we must ensure the schema exists here.
+        using var db = CreateDbContext();
+        await db.Database.MigrateAsync();
     }
 
     public new async Task DisposeAsync()
@@ -45,7 +57,7 @@ public class TestWebAppFactory : WebApplicationFactory<Program>, IAsyncLifetime
             {
                 // Infrastructure
                 ["ConnectionStrings:DefaultConnection"]            = _pg.GetConnectionString(),
-                ["Redis:ConnectionString"]                         = _redis.GetConnectionString(),
+                ["Redis:ConnectionString"]                         = _redis.GetConnectionString() + ",abortConnect=false",
 
                 // Job connections — point to same Postgres; not exercised by security tests
                 ["JobConnections:wf-jobs-minion:ConnectionString"] = _pg.GetConnectionString(),
@@ -89,6 +101,32 @@ public class TestWebAppFactory : WebApplicationFactory<Program>, IAsyncLifetime
                     ClockSkew                = TimeSpan.Zero,
                 };
             });
+
+            // Program.cs captures pgConnStr/redisConnStr as strings at startup, before
+            // ConfigureAppConfiguration overrides are applied. Re-register health checks here
+            // using the actual container connection strings.
+            services.Configure<HealthCheckServiceOptions>(opts =>
+            {
+                var toRemove = opts.Registrations
+                    .Where(r => r.Name is "postgres" or "redis")
+                    .ToList();
+                foreach (var r in toRemove)
+                    opts.Registrations.Remove(r);
+            });
+            services.AddHealthChecks()
+                .AddNpgSql(_pg.GetConnectionString(), healthQuery: "SELECT 1;", name: "postgres")
+                .AddRedis(_redis.GetConnectionString() + ",abortConnect=false", name: "redis");
+
+            // Background services (OutboxRelayWorker, Redis stream consumers) can have transient
+            // Redis/DB failures in the test environment. Prevent them from stopping the host —
+            // the security tests only exercise HTTP semantics, not message-relay behavior.
+            services.Configure<HostOptions>(opts =>
+            {
+                opts.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore;
+            });
+            // Add a middleware that reads X-Test-Client-IP and sets RemoteIpAddress so
+            // each test class can use a distinct IP partition in the rate limiter.
+            services.AddTransient<IStartupFilter, FakeIpStartupFilter>();
         });
     }
 
@@ -115,4 +153,31 @@ public class TestWebAppFactory : WebApplicationFactory<Program>, IAsyncLifetime
     public HttpClient CreateOperatorClient() => CreateClientWithToken(TestTokenFactory.ForOperator());
     public HttpClient CreateViewerClient()   => CreateClientWithToken(TestTokenFactory.ForViewer());
     public HttpClient CreateAnonymousClient() => CreateClient();
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Sets <c>HttpContext.Connection.RemoteIpAddress</c> from the <c>X-Test-Client-IP</c>
+    /// request header so tests can control which rate-limiter partition their requests hit.
+    /// Without this, <see cref="Microsoft.AspNetCore.TestHost.TestServer"/> always leaves
+    /// <c>RemoteIpAddress</c> null, causing all anonymous requests to share the "unknown"
+    /// partition and accidentally exhausting it across test classes.
+    /// </summary>
+    private sealed class FakeIpStartupFilter : IStartupFilter
+    {
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next)
+            => app =>
+            {
+                app.Use(async (ctx, nextMiddleware) =>
+                {
+                    if (ctx.Request.Headers.TryGetValue("X-Test-Client-IP", out var ipStr)
+                        && System.Net.IPAddress.TryParse(ipStr.ToString(), out var ip))
+                    {
+                        ctx.Connection.RemoteIpAddress = ip;
+                    }
+                    await nextMiddleware(ctx);
+                });
+                next(app);
+            };
+    }
 }

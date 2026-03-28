@@ -49,6 +49,7 @@ jobs:
         env:
           PYTHON_PATH: python3
           FlowForge__EncryptionKey: dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXRlc3Q=
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
         run: >
           dotnet test tests/FlowForge.Integration.Tests/FlowForge.Integration.Tests.csproj
           --no-build

@@ -78,7 +78,14 @@ public class RunScriptHandler(ILogger<RunScriptHandler> logger) : IWorkflowHandl
         }
 
         using var process = new Process { StartInfo = startInfo };
-        process.Start();
+        try
+        {
+            process.Start();
+        }
+        catch (Exception ex)
+        {
+            return WorkflowResult.Failure($"Failed to start interpreter '{interpreter}': {ex.Message}");
+        }
 
         await process.WaitForExitAsync(ct);
 

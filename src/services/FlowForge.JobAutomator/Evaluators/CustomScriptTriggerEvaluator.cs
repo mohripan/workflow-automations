@@ -65,15 +65,22 @@ public class CustomScriptTriggerEvaluator(
 
             using var process = new Process
             {
-                StartInfo = new ProcessStartInfo(pythonExe, scriptPath)
+                StartInfo = new ProcessStartInfo(pythonExe)
                 {
+                    ArgumentList = { scriptPath },
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
                 }
             };
 
-            process.Start();
+            try { process.Start(); }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Custom script trigger '{TriggerName}' could not start interpreter '{Python}'",
+                    trigger.Name, pythonExe);
+                return false;
+            }
             var stdout = await process.StandardOutput.ReadToEndAsync(cts.Token);
             var stderr = await process.StandardError.ReadToEndAsync(cts.Token);
             await process.WaitForExitAsync(cts.Token);
@@ -137,13 +144,15 @@ public class CustomScriptTriggerEvaluator(
     {
         using var process = new Process
         {
-            StartInfo = new ProcessStartInfo(exe, args)
+            StartInfo = new ProcessStartInfo(exe)
             {
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             }
         };
+        foreach (var arg in args)
+            process.StartInfo.ArgumentList.Add(arg);
         process.Start();
         await process.WaitForExitAsync(ct);
     }

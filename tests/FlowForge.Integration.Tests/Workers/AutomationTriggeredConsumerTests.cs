@@ -68,7 +68,9 @@ public class AutomationTriggeredConsumerTests : IAsyncLifetime
         job.ConnectionId.Should().Be(connectionId);
 
         // Assert — outbox message written in platform DB
-        var outbox = await _platformDb.OutboxMessages.FirstOrDefaultAsync(m => m.EventType == "JobCreatedEvent");
+        var testStart = DateTimeOffset.UtcNow.AddSeconds(-1);
+        var outbox = await _platformDb.OutboxMessages
+            .FirstOrDefaultAsync(m => m.EventType == "JobCreatedEvent" && m.CreatedAt >= testStart);
         outbox.Should().NotBeNull();
         outbox!.SentAt.Should().BeNull(); // not yet relayed
 
@@ -178,7 +180,9 @@ public class AutomationTriggeredConsumerTests : IAsyncLifetime
         jobs.Should().BeEmpty("disabled automation must not produce jobs");
 
         // Assert — no outbox message written
-        var outbox = await _platformDb.OutboxMessages.FirstOrDefaultAsync(m => m.EventType == "JobCreatedEvent");
+        var testStart = DateTimeOffset.UtcNow.AddSeconds(-1);
+        var outbox = await _platformDb.OutboxMessages
+            .FirstOrDefaultAsync(m => m.EventType == "JobCreatedEvent" && m.CreatedAt >= testStart);
         outbox.Should().BeNull();
 
         await jobsTx.RollbackAsync();
