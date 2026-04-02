@@ -309,7 +309,7 @@ public class CronJobAutomationE2ETests : IAsyncLifetime
             repoRoot, "src/services/FlowForge.WorkflowEngine/FlowForge.WorkflowEngine.csproj");
 
         using var build = Process.Start(new ProcessStartInfo("dotnet",
-            $"build \"{projectPath}\" --configuration {buildConfig} --no-restore -v quiet")
+            $"build \"{projectPath}\" --configuration {buildConfig} -v quiet")
         {
             RedirectStandardOutput = true,
             RedirectStandardError  = true,
