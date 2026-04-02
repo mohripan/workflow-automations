@@ -8,4 +8,5 @@ public interface IHostGroupRepository
     Task<IReadOnlyList<HostGroup>> GetAllAsync(CancellationToken ct = default);
     Task SaveAsync(HostGroup hostGroup, CancellationToken ct = default);
     Task DeleteAsync(HostGroup hostGroup, CancellationToken ct = default);
+    Task<IReadOnlyList<HostGroup>> GetAllWithTokenAsync(CancellationToken ct = default);
 }

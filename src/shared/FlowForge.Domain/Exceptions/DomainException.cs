@@ -16,3 +16,9 @@ public class InvalidAutomationException(string message) : DomainException(messag
 public class InvalidTriggerConditionException(string message) : DomainException(message);
 
 public class UnauthorizedWebhookException(Guid id) : DomainException($"Unauthorized webhook request for automation {id}");
+
+public class HostGroupNotFoundException(Guid id) : DomainException($"Host group {id} was not found.");
+
+public class InvalidRegistrationTokenException() : DomainException("Invalid or expired registration token.");
+
+public class HostNotFoundException(Guid id) : DomainException($"Host {id} was not found.");

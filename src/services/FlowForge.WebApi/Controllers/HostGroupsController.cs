@@ -21,6 +21,7 @@ public class HostGroupsController(
             g.Id,
             g.Name,
             g.ConnectionId,
+            HasRegistrationToken = g.RegistrationTokenHash != null,
             g.CreatedAt,
             g.UpdatedAt,
         });
@@ -33,7 +34,15 @@ public class HostGroupsController(
     {
         var group = await hostGroupRepo.GetByIdAsync(id, ct);
         if (group is null) return NotFound();
-        return Ok(new { group.Id, group.Name, group.ConnectionId, group.CreatedAt, group.UpdatedAt });
+        return Ok(new
+        {
+            group.Id,
+            group.Name,
+            group.ConnectionId,
+            HasRegistrationToken = group.RegistrationTokenHash != null,
+            group.CreatedAt,
+            group.UpdatedAt,
+        });
     }
 
     [HttpPost]
@@ -43,7 +52,15 @@ public class HostGroupsController(
         var group = HostGroup.Create(request.Name, request.ConnectionId);
         await hostGroupRepo.SaveAsync(group, ct);
         return CreatedAtAction(nameof(GetById), new { id = group.Id },
-            new { group.Id, group.Name, group.ConnectionId, group.CreatedAt, group.UpdatedAt });
+            new
+            {
+                group.Id,
+                group.Name,
+                group.ConnectionId,
+                HasRegistrationToken = false,
+                group.CreatedAt,
+                group.UpdatedAt,
+            });
     }
 
     [HttpGet("{id:guid}/hosts")]
@@ -61,5 +78,65 @@ public class HostGroupsController(
         return Ok(result);
     }
 
+    [HttpPost("{id:guid}/registration-token")]
+    [Authorize(Policy = "AdminOnly")]
+    public async Task<IActionResult> GenerateRegistrationToken(Guid id, CancellationToken ct)
+    {
+        var group = await hostGroupRepo.GetByIdAsync(id, ct);
+        if (group is null) return NotFound();
+
+        var rawToken = group.GenerateRegistrationToken();
+        await hostGroupRepo.SaveAsync(group, ct);
+
+        return Ok(new { Token = rawToken });
+    }
+
+    [HttpDelete("{id:guid}/registration-token")]
+    [Authorize(Policy = "AdminOnly")]
+    public async Task<IActionResult> RevokeRegistrationToken(Guid id, CancellationToken ct)
+    {
+        var group = await hostGroupRepo.GetByIdAsync(id, ct);
+        if (group is null) return NotFound();
+
+        group.RevokeRegistrationToken();
+        await hostGroupRepo.SaveAsync(group, ct);
+        return NoContent();
+    }
+
+    [HttpPost("{id:guid}/hosts")]
+    [Authorize(Policy = "AdminOnly")]
+    public async Task<IActionResult> CreateHost(Guid id, [FromBody] CreateHostRequest request, CancellationToken ct)
+    {
+        var group = await hostGroupRepo.GetByIdAsync(id, ct);
+        if (group is null) return NotFound();
+
+        var existing = await hostRepo.GetByNameAsync(request.Name, ct);
+        if (existing is not null)
+            return Conflict(new { Message = $"A host named '{request.Name}' already exists." });
+
+        var host = WorkflowHost.Create(request.Name, id);
+        await hostRepo.SaveAsync(host, ct);
+
+        return Created($"/api/host-groups/{id}/hosts", new
+        {
+            host.Id,
+            host.Name,
+            host.IsOnline,
+            LastHeartbeat = host.LastHeartbeatAt,
+        });
+    }
+
+    [HttpDelete("{id:guid}/hosts/{hostId:guid}")]
+    [Authorize(Policy = "AdminOnly")]
+    public async Task<IActionResult> RemoveHost(Guid id, Guid hostId, CancellationToken ct)
+    {
+        var host = await hostRepo.GetByIdAsync(hostId, ct);
+        if (host is null || host.HostGroupId != id) return NotFound();
+
+        await hostRepo.DeleteAsync(host, ct);
+        return NoContent();
+    }
+
     public record CreateHostGroupRequest(string Name, string ConnectionId);
+    public record CreateHostRequest(string Name);
 }

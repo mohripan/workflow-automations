@@ -49,4 +49,10 @@ public class WorkflowHostRepository(PlatformDbContext dbContext) : IWorkflowHost
     {
         return await dbContext.WorkflowHosts.ToListAsync(ct);
     }
+
+    public async Task DeleteAsync(WorkflowHost host, CancellationToken ct = default)
+    {
+        dbContext.WorkflowHosts.Remove(host);
+        await dbContext.SaveChangesAsync(ct);
+    }
 }

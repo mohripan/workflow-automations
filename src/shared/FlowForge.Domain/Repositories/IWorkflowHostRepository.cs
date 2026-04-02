@@ -10,4 +10,5 @@ public interface IWorkflowHostRepository
     Task<IReadOnlyList<WorkflowHost>> GetAllAsync(CancellationToken ct = default);
     Task SaveAsync(WorkflowHost host, CancellationToken ct = default);
     Task<WorkflowHost?> GetByNameAsync(string name, CancellationToken ct = default);
+    Task DeleteAsync(WorkflowHost host, CancellationToken ct = default);
 }

@@ -131,6 +131,7 @@ export interface HostGroup {
   id: string
   name: string
   connectionId: string
+  hasRegistrationToken: boolean
   createdAt: string
   updatedAt: string
 }
@@ -154,5 +155,13 @@ export interface DlqEntry {
 export interface CreateHostGroupRequest {
   name: string
   connectionId: string
+}
+
+export interface CreateHostRequest {
+  name: string
+}
+
+export interface GenerateTokenResponse {
+  token: string
 }
 

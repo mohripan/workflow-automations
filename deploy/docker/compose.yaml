@@ -283,6 +283,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       NODE_NAME: "minion"
+      HOST_CONNECTION_ID: "wf-jobs-minion"
       WorkflowHost__EnginePath: "/app/engine/FlowForge.WorkflowEngine.dll"
       ConnectionStrings__DefaultConnection: "Host=postgres-platform;Database=flowforge_platform;Username=postgres;Password=postgres"
       JobConnections__wf-jobs-minion__ConnectionString: "Host=postgres-minion;Database=flowforge_minion;Username=postgres;Password=postgres"
@@ -308,6 +309,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       NODE_NAME: "titan"
+      HOST_CONNECTION_ID: "wf-jobs-titan"
       WorkflowHost__EnginePath: "/app/engine/FlowForge.WorkflowEngine.dll"
       ConnectionStrings__DefaultConnection: "Host=postgres-platform;Database=flowforge_platform;Username=postgres;Password=postgres"
       JobConnections__wf-jobs-titan__ConnectionString: "Host=postgres-titan;Database=flowforge_titan;Username=postgres;Password=postgres"
