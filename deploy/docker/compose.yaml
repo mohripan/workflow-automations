@@ -150,8 +150,8 @@ services:
     image: caddy:2
     container_name: flowforge-caddy
     ports:
-      - "80:80"
-      - "443:443"
+      - "8090:80"
+      - "8443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -162,6 +162,18 @@ services:
         condition: service_healthy
 
   # ── Application Services ───────────────────────────────────────────────────
+
+  frontend:
+    restart: unless-stopped
+    build:
+      context: ../../src/frontend
+      dockerfile: Dockerfile
+    container_name: flowforge-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      webapi:
+        condition: service_healthy
 
   webapi:
     restart: unless-stopped
@@ -181,6 +193,13 @@ services:
       JobConnections__wf-jobs-titan__Provider: "PostgreSQL"
       OpenTelemetry__OtlpEndpoint: "http://jaeger:4317"
       AllowedOrigins__0: "http://localhost:3000"
+      # Keycloak: metadata fetched via internal Docker hostname; tokens from browser
+      # carry the external issuer (localhost:8180), M2M tokens carry the internal one.
+      Keycloak__Authority: "http://keycloak:8080/realms/flowforge"
+      Keycloak__MetadataAddress: "http://keycloak:8080/realms/flowforge/.well-known/openid-configuration"
+      Keycloak__Audience: "flowforge-webapi"
+      Keycloak__ValidIssuers__0: "http://localhost:8180/realms/flowforge"
+      Keycloak__ValidIssuers__1: "http://keycloak:8080/realms/flowforge"
     depends_on:
       postgres-platform:
         condition: service_healthy

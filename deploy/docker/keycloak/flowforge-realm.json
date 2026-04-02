@@ -8,7 +8,6 @@
   "resetPasswordAllowed": false,
   "editUsernameAllowed": false,
   "bruteForceProtected": true,
-
   "roles": {
     "realm": [
       {
@@ -31,7 +30,6 @@
       }
     ]
   },
-
   "clients": [
     {
       "clientId": "flowforge-webapi",
@@ -69,7 +67,6 @@
         }
       ]
     },
-
     {
       "clientId": "flowforge-jobautomator",
       "name": "FlowForge Job Automator",
@@ -101,7 +98,6 @@
         }
       ]
     },
-
     {
       "clientId": "flowforge-frontend",
       "name": "FlowForge Frontend",
@@ -123,10 +119,22 @@
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "flowforge-webapi-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "flowforge-webapi",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
     }
   ],
-
   "defaultDefaultClientScopes": [
     "web-origins",
     "profile",

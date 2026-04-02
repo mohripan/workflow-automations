@@ -50,9 +50,22 @@ builder.Services
         options.Authority = builder.Configuration["Keycloak:Authority"];
         options.Audience  = builder.Configuration["Keycloak:Audience"];
         options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
+
+        // In Docker, the WebAPI fetches OIDC metadata via the internal container hostname
+        // (keycloak:8080) while browser-issued tokens carry the external issuer URL
+        // (localhost:8180). MetadataAddress overrides where keys are fetched from, and
+        // ValidIssuers explicitly lists every accepted issuer so both paths are trusted.
+        var metadataAddress = builder.Configuration["Keycloak:MetadataAddress"];
+        if (metadataAddress is not null)
+            options.MetadataAddress = metadataAddress;
+
+        var validIssuers = builder.Configuration
+            .GetSection("Keycloak:ValidIssuers").Get<string[]>();
+
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer           = true,
+            ValidIssuers             = validIssuers,
             ValidateAudience         = true,
             ValidateLifetime         = true,
             ValidateIssuerSigningKey = true,
