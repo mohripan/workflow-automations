@@ -44,58 +44,68 @@ var registrationToken = Environment.GetEnvironmentVariable("REGISTRATION_TOKEN")
 var hostConnectionId = Environment.GetEnvironmentVariable("HOST_CONNECTION_ID");
 var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
 
-using (var scope = app.Services.CreateScope())
+const int maxRetries = 5;
+for (var attempt = 1; attempt <= maxRetries; attempt++)
 {
-    var hostRepo = scope.ServiceProvider.GetRequiredService<IWorkflowHostRepository>();
-    var hostGroupRepo = scope.ServiceProvider.GetRequiredService<IHostGroupRepository>();
-
-    var existingHost = await hostRepo.GetByNameAsync(hostId);
-
-    if (existingHost is null)
+    try
     {
-        Guid? resolvedGroupId = null;
+        using var scope = app.Services.CreateScope();
+        var hostRepo = scope.ServiceProvider.GetRequiredService<IWorkflowHostRepository>();
+        var hostGroupRepo = scope.ServiceProvider.GetRequiredService<IHostGroupRepository>();
 
-        // Mode 1: Direct registration via HOST_GROUP_ID
-        if (Guid.TryParse(hostGroupId, out var gid))
-        {
-            var group = await hostGroupRepo.GetByIdAsync(gid);
-            if (group is not null) resolvedGroupId = gid;
-            else logger.LogWarning("HOST_GROUP_ID {GroupId} not found in platform DB", hostGroupId);
-        }
-        // Mode 2: Token-based registration via REGISTRATION_TOKEN
-        else if (!string.IsNullOrEmpty(registrationToken))
-        {
-            var groups = await hostGroupRepo.GetAllWithTokenAsync();
-            var matchedGroup = groups.FirstOrDefault(g => g.ValidateRegistrationToken(registrationToken));
-            if (matchedGroup is not null) resolvedGroupId = matchedGroup.Id;
-            else logger.LogWarning("REGISTRATION_TOKEN did not match any host group");
-        }
-        // Mode 3: Lookup by HOST_CONNECTION_ID (matches HostGroup.ConnectionId)
-        else if (!string.IsNullOrEmpty(hostConnectionId))
-        {
-            var allGroups = await hostGroupRepo.GetAllAsync();
-            var matchedGroup = allGroups.FirstOrDefault(g =>
-                string.Equals(g.ConnectionId, hostConnectionId, StringComparison.OrdinalIgnoreCase));
-            if (matchedGroup is not null) resolvedGroupId = matchedGroup.Id;
-            else logger.LogWarning("HOST_CONNECTION_ID '{ConnId}' did not match any host group", hostConnectionId);
-        }
+        var existingHost = await hostRepo.GetByNameAsync(hostId);
 
-        if (resolvedGroupId.HasValue)
+        if (existingHost is null)
         {
-            var newHost = WorkflowHost.Create(hostId, resolvedGroupId.Value);
-            await hostRepo.SaveAsync(newHost);
-            logger.LogInformation("Host {HostName} registered to group {GroupId}", hostId, resolvedGroupId.Value);
+            Guid? resolvedGroupId = null;
+
+            if (Guid.TryParse(hostGroupId, out var gid))
+            {
+                var group = await hostGroupRepo.GetByIdAsync(gid);
+                if (group is not null) resolvedGroupId = gid;
+                else logger.LogWarning("HOST_GROUP_ID {GroupId} not found in platform DB", hostGroupId);
+            }
+            else if (!string.IsNullOrEmpty(registrationToken))
+            {
+                var groups = await hostGroupRepo.GetAllWithTokensAsync();
+                var matchedGroup = groups.FirstOrDefault(g => g.ValidateRegistrationToken(registrationToken));
+                if (matchedGroup is not null) resolvedGroupId = matchedGroup.Id;
+                else logger.LogWarning("REGISTRATION_TOKEN did not match any host group");
+            }
+            else if (!string.IsNullOrEmpty(hostConnectionId))
+            {
+                var allGroups = await hostGroupRepo.GetAllAsync();
+                var matchedGroup = allGroups.FirstOrDefault(g =>
+                    string.Equals(g.ConnectionId, hostConnectionId, StringComparison.OrdinalIgnoreCase));
+                if (matchedGroup is not null) resolvedGroupId = matchedGroup.Id;
+                else logger.LogWarning("HOST_CONNECTION_ID '{ConnId}' did not match any host group", hostConnectionId);
+            }
+
+            if (resolvedGroupId.HasValue)
+            {
+                var newHost = WorkflowHost.Create(hostId, resolvedGroupId.Value);
+                await hostRepo.SaveAsync(newHost);
+                logger.LogInformation("Host {HostName} registered to group {GroupId}", hostId, resolvedGroupId.Value);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "Host {HostName} could not self-register. Set HOST_GROUP_ID, REGISTRATION_TOKEN, or HOST_CONNECTION_ID. " +
+                    "The host will send heartbeats but won't receive jobs until registered.", hostId);
+            }
         }
         else
         {
-            logger.LogWarning(
-                "Host {HostName} could not self-register. Set HOST_GROUP_ID, REGISTRATION_TOKEN, or HOST_CONNECTION_ID. " +
-                "The host will send heartbeats but won't receive jobs until registered.", hostId);
+            logger.LogInformation("Host {HostName} already registered (group {GroupId})", hostId, existingHost.HostGroupId);
         }
+
+        break; // success
     }
-    else
+    catch (Exception ex) when (attempt < maxRetries)
     {
-        logger.LogInformation("Host {HostName} already registered (group {GroupId})", hostId, existingHost.HostGroupId);
+        logger.LogWarning(ex, "Self-registration attempt {Attempt}/{MaxRetries} failed, retrying in {Delay}s...",
+            attempt, maxRetries, attempt * 3);
+        await Task.Delay(TimeSpan.FromSeconds(attempt * 3));
     }
 }
 

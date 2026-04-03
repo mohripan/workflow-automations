@@ -11,6 +11,7 @@ public class PlatformDbContext(DbContextOptions<PlatformDbContext> options) : Db
     public DbSet<HostGroup> HostGroups => Set<HostGroup>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<RegistrationToken> RegistrationTokens => Set<RegistrationToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

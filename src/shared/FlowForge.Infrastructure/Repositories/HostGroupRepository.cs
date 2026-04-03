@@ -12,9 +12,26 @@ public class HostGroupRepository(PlatformDbContext dbContext) : IHostGroupReposi
         return await dbContext.HostGroups.FindAsync([id], ct);
     }
 
+    public async Task<HostGroup?> GetByIdWithTokensAsync(Guid id, CancellationToken ct = default)
+    {
+        return await dbContext.HostGroups
+            .Include(g => g.RegistrationTokens)
+            .FirstOrDefaultAsync(g => g.Id == id, ct);
+    }
+
     public async Task<IReadOnlyList<HostGroup>> GetAllAsync(CancellationToken ct = default)
     {
-        return await dbContext.HostGroups.ToListAsync(ct);
+        return await dbContext.HostGroups
+            .Include(g => g.RegistrationTokens)
+            .ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<HostGroup>> GetAllWithTokensAsync(CancellationToken ct = default)
+    {
+        return await dbContext.HostGroups
+            .Include(g => g.RegistrationTokens)
+            .Where(g => g.RegistrationTokens.Any(t => t.ExpiresAt > DateTimeOffset.UtcNow))
+            .ToListAsync(ct);
     }
 
     public async Task SaveAsync(HostGroup hostGroup, CancellationToken ct = default)
@@ -30,12 +47,5 @@ public class HostGroupRepository(PlatformDbContext dbContext) : IHostGroupReposi
     {
         dbContext.HostGroups.Remove(hostGroup);
         await dbContext.SaveChangesAsync(ct);
-    }
-
-    public async Task<IReadOnlyList<HostGroup>> GetAllWithTokenAsync(CancellationToken ct = default)
-    {
-        return await dbContext.HostGroups
-            .Where(g => g.RegistrationTokenHash != null)
-            .ToListAsync(ct);
     }
 }

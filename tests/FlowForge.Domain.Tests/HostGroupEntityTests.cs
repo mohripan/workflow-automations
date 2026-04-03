@@ -6,171 +6,254 @@ namespace FlowForge.Domain.Tests;
 public class HostGroupEntityTests
 {
     [Fact]
-    public void Create_NewHostGroup_HasIdAndProperties()
+    public void Create_ShouldInitializeProperties()
     {
-        var group = HostGroup.Create("production", "wf-jobs-prod");
+        var group = HostGroup.Create("Test Group", "wf-jobs-test");
 
-        group.Id.Should().NotBe(Guid.Empty);
-        group.Name.Should().Be("production");
-        group.ConnectionId.Should().Be("wf-jobs-prod");
-        group.RegistrationTokenHash.Should().BeNull();
+        group.Name.Should().Be("Test Group");
+        group.ConnectionId.Should().Be("wf-jobs-test");
+        group.RegistrationTokens.Should().BeEmpty();
+        group.HasActiveTokens.Should().BeFalse();
+        group.ActiveTokenCount.Should().Be(0);
     }
 
     [Fact]
-    public void Create_TwoGroups_HaveDifferentIds()
+    public void AddRegistrationToken_ShouldReturnRawTokenAndPersistEntity()
     {
-        var g1 = HostGroup.Create("group-a", "conn-a");
-        var g2 = HostGroup.Create("group-b", "conn-b");
+        var group = HostGroup.Create("Test", "conn");
 
-        g1.Id.Should().NotBe(g2.Id);
+        var (token, rawToken) = group.AddRegistrationToken(TimeSpan.FromHours(24), "my-label");
+
+        rawToken.Should().NotBeNullOrEmpty();
+        token.Should().NotBeNull();
+        token.Label.Should().Be("my-label");
+        token.IsExpired.Should().BeFalse();
+        group.RegistrationTokens.Should().HaveCount(1);
+        group.HasActiveTokens.Should().BeTrue();
+        group.ActiveTokenCount.Should().Be(1);
     }
 
     [Fact]
-    public void GenerateRegistrationToken_ReturnsNonEmptyToken()
+    public void AddRegistrationToken_ShouldSupportMultipleTokens()
     {
-        var group = HostGroup.Create("test", "conn-test");
+        var group = HostGroup.Create("Test", "conn");
 
-        var token = group.GenerateRegistrationToken();
+        var (_, token1) = group.AddRegistrationToken(TimeSpan.FromHours(24), "token-1");
+        var (_, token2) = group.AddRegistrationToken(TimeSpan.FromHours(48), "token-2");
 
-        token.Should().NotBeNullOrWhiteSpace();
-        group.RegistrationTokenHash.Should().NotBeNullOrWhiteSpace();
+        group.RegistrationTokens.Should().HaveCount(2);
+        group.ActiveTokenCount.Should().Be(2);
+        token1.Should().NotBe(token2);
     }
 
     [Fact]
-    public void GenerateRegistrationToken_ProducesUniqueTokens()
+    public void AddRegistrationToken_EachCallShouldProduceUniqueTokens()
     {
-        var group = HostGroup.Create("test", "conn-test");
+        var group = HostGroup.Create("Test", "conn");
 
-        var token1 = group.GenerateRegistrationToken();
-        var token2 = group.GenerateRegistrationToken();
+        var (_, raw1) = group.AddRegistrationToken(TimeSpan.FromHours(1));
+        var (_, raw2) = group.AddRegistrationToken(TimeSpan.FromHours(1));
 
-        token1.Should().NotBe(token2, "each call should produce a new random token");
+        raw1.Should().NotBe(raw2);
     }
 
     [Fact]
-    public void ValidateRegistrationToken_WithCorrectToken_ReturnsTrue()
+    public void ValidateRegistrationToken_ShouldReturnTrueForCorrectToken()
     {
-        var group = HostGroup.Create("test", "conn-test");
-        var token = group.GenerateRegistrationToken();
+        var group = HostGroup.Create("Test", "conn");
+        var (_, rawToken) = group.AddRegistrationToken(TimeSpan.FromHours(24));
 
-        group.ValidateRegistrationToken(token).Should().BeTrue();
+        group.ValidateRegistrationToken(rawToken).Should().BeTrue();
     }
 
     [Fact]
-    public void ValidateRegistrationToken_WithWrongToken_ReturnsFalse()
+    public void ValidateRegistrationToken_ShouldReturnFalseForWrongToken()
     {
-        var group = HostGroup.Create("test", "conn-test");
-        group.GenerateRegistrationToken();
+        var group = HostGroup.Create("Test", "conn");
+        group.AddRegistrationToken(TimeSpan.FromHours(24));
 
-        group.ValidateRegistrationToken("completely-wrong-token").Should().BeFalse();
+        group.ValidateRegistrationToken("wrong-token").Should().BeFalse();
     }
 
     [Fact]
-    public void ValidateRegistrationToken_WithNoTokenGenerated_ReturnsFalse()
+    public void ValidateRegistrationToken_ShouldReturnFalseForEmptyToken()
     {
-        var group = HostGroup.Create("test", "conn-test");
+        var group = HostGroup.Create("Test", "conn");
+        group.AddRegistrationToken(TimeSpan.FromHours(24));
+
+        group.ValidateRegistrationToken("").Should().BeFalse();
+        group.ValidateRegistrationToken(null!).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ValidateRegistrationToken_ShouldReturnFalseWhenNoTokensExist()
+    {
+        var group = HostGroup.Create("Test", "conn");
 
         group.ValidateRegistrationToken("any-token").Should().BeFalse();
     }
 
     [Fact]
-    public void ValidateRegistrationToken_WithEmptyString_ReturnsFalse()
+    public void ValidateRegistrationToken_ShouldMatchCorrectTokenAmongMultiple()
     {
-        var group = HostGroup.Create("test", "conn-test");
-        group.GenerateRegistrationToken();
+        var group = HostGroup.Create("Test", "conn");
+        var (_, raw1) = group.AddRegistrationToken(TimeSpan.FromHours(24), "first");
+        var (_, raw2) = group.AddRegistrationToken(TimeSpan.FromHours(24), "second");
 
-        group.ValidateRegistrationToken("").Should().BeFalse();
+        group.ValidateRegistrationToken(raw1).Should().BeTrue();
+        group.ValidateRegistrationToken(raw2).Should().BeTrue();
+        group.ValidateRegistrationToken("wrong").Should().BeFalse();
     }
 
     [Fact]
-    public void ValidateRegistrationToken_WithNull_ReturnsFalse()
+    public void RevokeRegistrationToken_ShouldRemoveSpecificToken()
     {
-        var group = HostGroup.Create("test", "conn-test");
-        group.GenerateRegistrationToken();
+        var group = HostGroup.Create("Test", "conn");
+        var (token1, raw1) = group.AddRegistrationToken(TimeSpan.FromHours(24), "keep");
+        var (token2, raw2) = group.AddRegistrationToken(TimeSpan.FromHours(24), "revoke");
 
-        group.ValidateRegistrationToken(null!).Should().BeFalse();
+        var result = group.RevokeRegistrationToken(token2.Id);
+
+        result.Should().BeTrue();
+        group.RegistrationTokens.Should().HaveCount(1);
+        group.ValidateRegistrationToken(raw1).Should().BeTrue();
+        group.ValidateRegistrationToken(raw2).Should().BeFalse();
     }
 
     [Fact]
-    public void ValidateRegistrationToken_AfterRegenerate_OldTokenInvalid()
+    public void RevokeRegistrationToken_ShouldReturnFalseForNonexistentToken()
     {
-        var group = HostGroup.Create("test", "conn-test");
-        var oldToken = group.GenerateRegistrationToken();
-        var newToken = group.GenerateRegistrationToken();
+        var group = HostGroup.Create("Test", "conn");
+        group.AddRegistrationToken(TimeSpan.FromHours(24));
 
-        group.ValidateRegistrationToken(oldToken).Should().BeFalse();
-        group.ValidateRegistrationToken(newToken).Should().BeTrue();
+        group.RevokeRegistrationToken(Guid.NewGuid()).Should().BeFalse();
     }
 
     [Fact]
-    public void RevokeRegistrationToken_ClearsHash()
+    public void RevokeAllTokens_ShouldLeaveGroupWithNoTokens()
     {
-        var group = HostGroup.Create("test", "conn-test");
-        var token = group.GenerateRegistrationToken();
+        var group = HostGroup.Create("Test", "conn");
+        var (t1, _) = group.AddRegistrationToken(TimeSpan.FromHours(24));
+        var (t2, _) = group.AddRegistrationToken(TimeSpan.FromHours(24));
 
-        group.RevokeRegistrationToken();
+        group.RevokeRegistrationToken(t1.Id);
+        group.RevokeRegistrationToken(t2.Id);
 
-        group.RegistrationTokenHash.Should().BeNull();
-        group.ValidateRegistrationToken(token).Should().BeFalse();
+        group.RegistrationTokens.Should().BeEmpty();
+        group.HasActiveTokens.Should().BeFalse();
     }
 
     [Fact]
-    public void Update_ChangesName()
+    public void TokenHash_ShouldBe64HexChars()
     {
-        var group = HostGroup.Create("old-name", "conn-test");
+        var group = HostGroup.Create("Test", "conn");
+        var (token, _) = group.AddRegistrationToken(TimeSpan.FromHours(1));
 
-        group.Update("new-name");
-
-        group.Name.Should().Be("new-name");
+        token.TokenHash.Should().HaveLength(64);
+        token.TokenHash.Should().MatchRegex("^[0-9a-f]{64}$");
     }
 
     [Fact]
-    public void GenerateRegistrationToken_StoresConsistentHash()
+    public void Token_ShouldHaveCorrectExpiresAt()
     {
-        var group = HostGroup.Create("test", "conn-test");
-        var token = group.GenerateRegistrationToken();
-        var hash1 = group.RegistrationTokenHash;
+        var before = DateTimeOffset.UtcNow;
+        var group = HostGroup.Create("Test", "conn");
+        var (token, _) = group.AddRegistrationToken(TimeSpan.FromHours(24));
+        var after = DateTimeOffset.UtcNow;
 
-        // Validate that the stored hash is consistent with the token
-        group.ValidateRegistrationToken(token).Should().BeTrue();
-        group.RegistrationTokenHash.Should().Be(hash1);
+        token.ExpiresAt.Should().BeAfter(before.AddHours(23));
+        token.ExpiresAt.Should().BeBefore(after.AddHours(25));
     }
 
     [Fact]
-    public void GenerateRegistrationToken_HashIs64HexChars()
+    public void Update_ShouldChangeName()
     {
-        var group = HostGroup.Create("test", "conn-test");
-        group.GenerateRegistrationToken();
+        var group = HostGroup.Create("Old Name", "conn");
+        var originalUpdate = group.UpdatedAt;
 
-        // SHA-256 produces 32 bytes = 64 hex chars
-        group.RegistrationTokenHash.Should().NotBeNull();
-        group.RegistrationTokenHash.Should().HaveLength(64);
-        group.RegistrationTokenHash.Should().MatchRegex("^[0-9a-f]{64}$");
+        group.Update("New Name");
+
+        group.Name.Should().Be("New Name");
+        group.UpdatedAt.Should().BeOnOrAfter(originalUpdate);
     }
 
     [Fact]
-    public void GenerateRegistrationToken_UpdatesTimestamp()
+    public void AddRegistrationToken_ShouldUpdateTimestamp()
     {
-        var group = HostGroup.Create("test", "conn-test");
-        var initialUpdatedAt = group.UpdatedAt;
+        var group = HostGroup.Create("Test", "conn");
+        var before = group.UpdatedAt;
 
-        // Small artificial delay to ensure timestamp differs
-        Thread.Sleep(5);
-        group.GenerateRegistrationToken();
+        group.AddRegistrationToken(TimeSpan.FromHours(1));
 
-        group.UpdatedAt.Should().BeOnOrAfter(initialUpdatedAt);
+        group.UpdatedAt.Should().BeOnOrAfter(before);
+    }
+}
+
+public class RegistrationTokenEntityTests
+{
+    [Fact]
+    public void Create_ShouldInitializeAllProperties()
+    {
+        var groupId = Guid.NewGuid();
+        var (token, rawToken) = RegistrationToken.Create(groupId, TimeSpan.FromHours(12), "test-label");
+
+        token.Id.Should().NotBeEmpty();
+        token.HostGroupId.Should().Be(groupId);
+        token.TokenHash.Should().HaveLength(64);
+        token.Label.Should().Be("test-label");
+        token.IsExpired.Should().BeFalse();
+        rawToken.Should().NotBeNullOrEmpty();
     }
 
     [Fact]
-    public void RevokeRegistrationToken_UpdatesTimestamp()
+    public void Validate_ShouldReturnTrueForCorrectToken()
     {
-        var group = HostGroup.Create("test", "conn-test");
-        group.GenerateRegistrationToken();
-        var afterGen = group.UpdatedAt;
+        var (token, rawToken) = RegistrationToken.Create(Guid.NewGuid(), TimeSpan.FromHours(1));
 
-        Thread.Sleep(5);
-        group.RevokeRegistrationToken();
+        token.Validate(rawToken).Should().BeTrue();
+    }
 
-        group.UpdatedAt.Should().BeOnOrAfter(afterGen);
+    [Fact]
+    public void Validate_ShouldReturnFalseForWrongToken()
+    {
+        var (token, _) = RegistrationToken.Create(Guid.NewGuid(), TimeSpan.FromHours(1));
+
+        token.Validate("wrong-token").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Validate_ShouldReturnFalseForEmptyInput()
+    {
+        var (token, _) = RegistrationToken.Create(Guid.NewGuid(), TimeSpan.FromHours(1));
+
+        token.Validate("").Should().BeFalse();
+        token.Validate(null!).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsExpired_ShouldBeFalseForFutureExpiry()
+    {
+        var (token, _) = RegistrationToken.Create(Guid.NewGuid(), TimeSpan.FromHours(1));
+
+        token.IsExpired.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Validate_SameTokenShouldProduceConsistentResults()
+    {
+        var (token, rawToken) = RegistrationToken.Create(Guid.NewGuid(), TimeSpan.FromHours(1));
+
+        // Validate same token twice — should be consistent
+        token.Validate(rawToken).Should().BeTrue();
+        token.Validate(rawToken).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Create_DifferentCallsShouldProduceDifferentTokenHashes()
+    {
+        var (token1, _) = RegistrationToken.Create(Guid.NewGuid(), TimeSpan.FromHours(1));
+        var (token2, _) = RegistrationToken.Create(Guid.NewGuid(), TimeSpan.FromHours(1));
+
+        token1.TokenHash.Should().NotBe(token2.TokenHash);
     }
 }

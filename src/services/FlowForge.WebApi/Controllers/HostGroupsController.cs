@@ -9,22 +9,17 @@ namespace FlowForge.WebApi.Controllers;
 [Route("api/host-groups")]
 public class HostGroupsController(
     IHostGroupRepository hostGroupRepo,
-    IWorkflowHostRepository hostRepo) : ControllerBase
+    IWorkflowHostRepository hostRepo,
+    IAuditLogRepository auditRepo) : ControllerBase
 {
+    private string? CurrentUsername => User.FindFirst("preferred_username")?.Value;
+
     [HttpGet]
     [Authorize(Policy = "ViewerOrAbove")]
     public async Task<IActionResult> GetAll(CancellationToken ct)
     {
         var groups = await hostGroupRepo.GetAllAsync(ct);
-        var result = groups.Select(g => new
-        {
-            g.Id,
-            g.Name,
-            g.ConnectionId,
-            HasRegistrationToken = g.RegistrationTokenHash != null,
-            g.CreatedAt,
-            g.UpdatedAt,
-        });
+        var result = groups.Select(MapGroupDto);
         return Ok(result);
     }
 
@@ -32,17 +27,9 @@ public class HostGroupsController(
     [Authorize(Policy = "ViewerOrAbove")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
     {
-        var group = await hostGroupRepo.GetByIdAsync(id, ct);
+        var group = await hostGroupRepo.GetByIdWithTokensAsync(id, ct);
         if (group is null) return NotFound();
-        return Ok(new
-        {
-            group.Id,
-            group.Name,
-            group.ConnectionId,
-            HasRegistrationToken = group.RegistrationTokenHash != null,
-            group.CreatedAt,
-            group.UpdatedAt,
-        });
+        return Ok(MapGroupDto(group));
     }
 
     [HttpPost]
@@ -51,16 +38,29 @@ public class HostGroupsController(
     {
         var group = HostGroup.Create(request.Name, request.ConnectionId);
         await hostGroupRepo.SaveAsync(group, ct);
-        return CreatedAtAction(nameof(GetById), new { id = group.Id },
-            new
-            {
-                group.Id,
-                group.Name,
-                group.ConnectionId,
-                HasRegistrationToken = false,
-                group.CreatedAt,
-                group.UpdatedAt,
-            });
+        await Audit("HostGroup.Created", group.Id.ToString(),
+            $"Created host group '{request.Name}' (connection: {request.ConnectionId})", ct);
+        return CreatedAtAction(nameof(GetById), new { id = group.Id }, MapGroupDto(group));
+    }
+
+    [HttpDelete("{id:guid}")]
+    [Authorize(Policy = "AdminOnly")]
+    public async Task<IActionResult> Delete(Guid id, [FromBody] DeleteHostGroupRequest request, CancellationToken ct)
+    {
+        var group = await hostGroupRepo.GetByIdAsync(id, ct);
+        if (group is null) return NotFound();
+
+        if (!string.Equals(group.Name, request.ConfirmName, StringComparison.Ordinal))
+            return BadRequest(new { Message = "Confirmation name does not match the host group name." });
+
+        var hosts = await hostRepo.GetByGroupAsync(id, ct);
+        foreach (var host in hosts)
+            await hostRepo.DeleteAsync(host, ct);
+
+        await hostGroupRepo.DeleteAsync(group, ct);
+        await Audit("HostGroup.Deleted", id.ToString(),
+            $"Deleted host group '{group.Name}' and {hosts.Count} host(s)", ct);
+        return NoContent();
     }
 
     [HttpGet("{id:guid}/hosts")]
@@ -78,28 +78,56 @@ public class HostGroupsController(
         return Ok(result);
     }
 
-    [HttpPost("{id:guid}/registration-token")]
-    [Authorize(Policy = "AdminOnly")]
-    public async Task<IActionResult> GenerateRegistrationToken(Guid id, CancellationToken ct)
+    [HttpGet("{id:guid}/tokens")]
+    [Authorize(Policy = "ViewerOrAbove")]
+    public async Task<IActionResult> GetTokens(Guid id, CancellationToken ct)
     {
-        var group = await hostGroupRepo.GetByIdAsync(id, ct);
+        var group = await hostGroupRepo.GetByIdWithTokensAsync(id, ct);
         if (group is null) return NotFound();
 
-        var rawToken = group.GenerateRegistrationToken();
-        await hostGroupRepo.SaveAsync(group, ct);
-
-        return Ok(new { Token = rawToken });
+        var result = group.RegistrationTokens.Select(t => new
+        {
+            t.Id,
+            t.Label,
+            t.ExpiresAt,
+            t.IsExpired,
+            t.CreatedAt,
+        });
+        return Ok(result);
     }
 
-    [HttpDelete("{id:guid}/registration-token")]
+    [HttpPost("{id:guid}/registration-token")]
     [Authorize(Policy = "AdminOnly")]
-    public async Task<IActionResult> RevokeRegistrationToken(Guid id, CancellationToken ct)
+    public async Task<IActionResult> GenerateRegistrationToken(
+        Guid id,
+        [FromBody] GenerateTokenRequest? request,
+        CancellationToken ct)
     {
-        var group = await hostGroupRepo.GetByIdAsync(id, ct);
+        var group = await hostGroupRepo.GetByIdWithTokensAsync(id, ct);
         if (group is null) return NotFound();
 
-        group.RevokeRegistrationToken();
+        var ttl = TimeSpan.FromHours(request?.ExpiresInHours ?? 24);
+        var (token, rawToken) = group.AddRegistrationToken(ttl, request?.Label);
         await hostGroupRepo.SaveAsync(group, ct);
+        await Audit("RegistrationToken.Generated", group.Id.ToString(),
+            $"Generated token '{request?.Label ?? "(unnamed)"}' for group '{group.Name}', expires in {ttl.TotalHours}h", ct);
+
+        return Ok(new { Token = rawToken, token.Id, token.ExpiresAt, token.Label });
+    }
+
+    [HttpDelete("{id:guid}/registration-token/{tokenId:guid}")]
+    [Authorize(Policy = "AdminOnly")]
+    public async Task<IActionResult> RevokeRegistrationToken(Guid id, Guid tokenId, CancellationToken ct)
+    {
+        var group = await hostGroupRepo.GetByIdWithTokensAsync(id, ct);
+        if (group is null) return NotFound();
+
+        if (!group.RevokeRegistrationToken(tokenId))
+            return NotFound(new { Message = "Token not found." });
+
+        await hostGroupRepo.SaveAsync(group, ct);
+        await Audit("RegistrationToken.Revoked", group.Id.ToString(),
+            $"Revoked token {tokenId} from group '{group.Name}'", ct);
         return NoContent();
     }
 
@@ -116,6 +144,8 @@ public class HostGroupsController(
 
         var host = WorkflowHost.Create(request.Name, id);
         await hostRepo.SaveAsync(host, ct);
+        await Audit("Host.Added", group.Id.ToString(),
+            $"Added host '{request.Name}' to group '{group.Name}'", ct);
 
         return Created($"/api/host-groups/{id}/hosts", new
         {
@@ -134,9 +164,39 @@ public class HostGroupsController(
         if (host is null || host.HostGroupId != id) return NotFound();
 
         await hostRepo.DeleteAsync(host, ct);
+        await Audit("Host.Removed", id.ToString(),
+            $"Removed host '{host.Name}' from group {id}", ct);
         return NoContent();
     }
 
+    [HttpGet("{id:guid}/activity")]
+    [Authorize(Policy = "ViewerOrAbove")]
+    public async Task<IActionResult> GetActivity(Guid id, CancellationToken ct)
+    {
+        var logs = await auditRepo.GetAllAsync(entityId: id.ToString(), ct: ct);
+        return Ok(logs.Take(50));
+    }
+
+    private static object MapGroupDto(HostGroup g) => new
+    {
+        g.Id,
+        g.Name,
+        g.ConnectionId,
+        ActiveTokenCount = g.ActiveTokenCount,
+        HasActiveTokens = g.HasActiveTokens,
+        g.CreatedAt,
+        g.UpdatedAt,
+    };
+
+    private async Task Audit(string action, string entityId, string detail, CancellationToken ct)
+    {
+        var log = AuditLog.Create(action, entityId,
+            User.FindFirst("sub")?.Value, CurrentUsername, detail);
+        await auditRepo.AddAsync(log, ct);
+    }
+
     public record CreateHostGroupRequest(string Name, string ConnectionId);
+    public record DeleteHostGroupRequest(string ConfirmName);
     public record CreateHostRequest(string Name);
+    public record GenerateTokenRequest(string? Label, double? ExpiresInHours);
 }

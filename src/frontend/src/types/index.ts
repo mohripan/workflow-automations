@@ -131,9 +131,18 @@ export interface HostGroup {
   id: string
   name: string
   connectionId: string
-  hasRegistrationToken: boolean
+  activeTokenCount: number
+  hasActiveTokens: boolean
   createdAt: string
   updatedAt: string
+}
+
+export interface RegistrationTokenInfo {
+  id: string
+  label?: string
+  expiresAt: string
+  isExpired: boolean
+  createdAt: string
 }
 
 export interface WorkflowHostInfo {
@@ -157,11 +166,33 @@ export interface CreateHostGroupRequest {
   connectionId: string
 }
 
+export interface DeleteHostGroupRequest {
+  confirmName: string
+}
+
 export interface CreateHostRequest {
   name: string
 }
 
+export interface GenerateTokenRequest {
+  label?: string
+  expiresInHours?: number
+}
+
 export interface GenerateTokenResponse {
   token: string
+  id: string
+  expiresAt: string
+  label?: string
+}
+
+export interface AuditLogEntry {
+  id: string
+  action: string
+  entityId?: string
+  userId?: string
+  username?: string
+  detail?: string
+  occurredAt: string
 }
 

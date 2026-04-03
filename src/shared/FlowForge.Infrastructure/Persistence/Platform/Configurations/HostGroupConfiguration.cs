@@ -13,6 +13,13 @@ public class HostGroupConfiguration : IEntityTypeConfiguration<HostGroup>
         builder.Property(x => x.Name).IsRequired().HasMaxLength(100);
         builder.Property(x => x.ConnectionId).IsRequired().HasMaxLength(50);
         builder.HasIndex(x => x.ConnectionId).IsUnique();
-        builder.Property(x => x.RegistrationTokenHash).HasMaxLength(64);
+
+        builder.HasMany(x => x.RegistrationTokens)
+            .WithOne()
+            .HasForeignKey(x => x.HostGroupId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.Navigation(x => x.RegistrationTokens)
+            .UsePropertyAccessMode(PropertyAccessMode.Field);
     }
 }

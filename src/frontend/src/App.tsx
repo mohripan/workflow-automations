@@ -10,6 +10,7 @@ import AutomationFormPage from './pages/AutomationFormPage'
 import JobsList from './pages/JobsList'
 import JobDetail from './pages/JobDetail'
 import HostGroupsPage from './pages/HostGroups'
+import HostGroupDetailPage from './pages/HostGroupDetail'
 import DLQPage from './pages/DLQPage'
 import TaskTypesPage from './pages/TaskTypes'
 
@@ -41,6 +42,7 @@ export default function App() {
               <Route path="jobs" element={<JobsList />} />
               <Route path="jobs/:connectionId/:id" element={<JobDetail />} />
               <Route path="host-groups" element={<HostGroupsPage />} />
+              <Route path="host-groups/:id" element={<HostGroupDetailPage />} />
               <Route path="dlq" element={<DLQPage />} />
               <Route path="task-types" element={<TaskTypesPage />} />
               <Route path="*" element={<Navigate to="/dashboard" replace />} />

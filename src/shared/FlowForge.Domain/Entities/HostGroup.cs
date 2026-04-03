@@ -1,13 +1,12 @@
-using System.Security.Cryptography;
-using System.Text;
-
 namespace FlowForge.Domain.Entities;
 
 public class HostGroup : BaseEntity<Guid>
 {
     public string Name { get; private set; } = default!;
     public string ConnectionId { get; private set; } = default!;
-    public string? RegistrationTokenHash { get; private set; }
+
+    private readonly List<RegistrationToken> _registrationTokens = [];
+    public IReadOnlyList<RegistrationToken> RegistrationTokens => _registrationTokens.AsReadOnly();
 
     private HostGroup() { }
 
@@ -22,43 +21,51 @@ public class HostGroup : BaseEntity<Guid>
     }
 
     /// <summary>
-    /// Generates a new registration token for agent enrollment.
-    /// Returns the raw token (show once to admin); only the SHA-256 hash is persisted.
+    /// Creates a new registration token with TTL. Returns the raw token (show once to admin).
     /// </summary>
-    public string GenerateRegistrationToken()
+    public (RegistrationToken Token, string RawToken) AddRegistrationToken(TimeSpan ttl, string? label = null)
     {
-        var rawBytes = RandomNumberGenerator.GetBytes(32);
-        var rawToken = Convert.ToBase64String(rawBytes);
-        RegistrationTokenHash = HashToken(rawToken);
+        var (token, rawToken) = RegistrationToken.Create(Id, ttl, label);
+        _registrationTokens.Add(token);
         UpdateTimestamp();
-        return rawToken;
+        return (token, rawToken);
     }
 
+    /// <summary>
+    /// Validates a raw token against all active (non-expired) tokens for this group.
+    /// </summary>
     public bool ValidateRegistrationToken(string rawToken)
     {
-        if (string.IsNullOrEmpty(RegistrationTokenHash) || string.IsNullOrEmpty(rawToken))
+        if (string.IsNullOrEmpty(rawToken))
             return false;
 
-        return CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(RegistrationTokenHash),
-            Encoding.UTF8.GetBytes(HashToken(rawToken)));
+        return _registrationTokens.Any(t => t.Validate(rawToken));
     }
 
-    public void RevokeRegistrationToken()
+    /// <summary>
+    /// Revokes (removes) a specific registration token by ID.
+    /// </summary>
+    public bool RevokeRegistrationToken(Guid tokenId)
     {
-        RegistrationTokenHash = null;
+        var token = _registrationTokens.FirstOrDefault(t => t.Id == tokenId);
+        if (token is null) return false;
+
+        _registrationTokens.Remove(token);
         UpdateTimestamp();
+        return true;
     }
+
+    /// <summary>
+    /// Returns count of active (non-expired) registration tokens.
+    /// </summary>
+    public int ActiveTokenCount => _registrationTokens.Count(t => !t.IsExpired);
+
+    public bool HasActiveTokens => _registrationTokens.Any(t => !t.IsExpired);
 
     public void Update(string name)
     {
         Name = name;
         UpdateTimestamp();
     }
-
-    internal static string HashToken(string rawToken)
-    {
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(rawToken));
-        return Convert.ToHexStringLower(hash);
-    }
 }
+

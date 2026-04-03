@@ -25,7 +25,7 @@ public class HostRegistrationController(
             return BadRequest(new { Message = "Token and HostName are required." });
 
         // Find the host group that owns this token
-        var groups = await hostGroupRepo.GetAllWithTokenAsync(ct);
+        var groups = await hostGroupRepo.GetAllWithTokensAsync(ct);
         var group = groups.FirstOrDefault(g => g.ValidateRegistrationToken(request.Token));
 
         if (group is null)

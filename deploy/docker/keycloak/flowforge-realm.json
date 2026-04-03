@@ -147,5 +147,26 @@
     "address",
     "phone",
     "microprofile-jwt"
+  ],
+  "users": [
+    {
+      "username": "demo_admin",
+      "email": "demo_admin@flowforge.local",
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "Admin",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "webapi",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "admin",
+        "default-roles-flowforge"
+      ]
+    }
   ]
 }
