@@ -9,6 +9,7 @@ using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using FlowForge.Infrastructure.Messaging.Abstractions;
 using StackExchange.Redis;
 
 namespace FlowForge.Integration.Tests.Workers;
@@ -105,11 +106,12 @@ public class OutboxRelayWorkerTests : IAsyncLifetime
 
     private OutboxRelayWorker BuildWorker(IConnectionMultiplexer redis)
     {
+        var publisher = new RedisStreamPublisher(redis) as IMessagePublisher;
         var services = new ServiceCollection();
         services.AddSingleton(_platformDb);
         services.AddLogging();
 
         var sp = services.BuildServiceProvider();
-        return new OutboxRelayWorker(redis, sp.GetRequiredService<IServiceScopeFactory>(), Options.Create(new FlowForge.WebApi.Options.OutboxRelayOptions()), NullLogger<OutboxRelayWorker>.Instance);
+        return new OutboxRelayWorker(publisher, sp.GetRequiredService<IServiceScopeFactory>(), Options.Create(new FlowForge.WebApi.Options.OutboxRelayOptions()), NullLogger<OutboxRelayWorker>.Instance);
     }
 }

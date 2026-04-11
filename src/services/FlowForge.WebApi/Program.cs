@@ -1,8 +1,11 @@
 using FlowForge.Infrastructure;
+using FlowForge.Infrastructure.Messaging;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.Dapr;
 using FlowForge.Infrastructure.Messaging.Redis;
 using Microsoft.AspNetCore.HttpOverrides;
 using OpenTelemetry.Trace;
+using FlowForge.WebApi.Handlers;
 using FlowForge.WebApi.Hubs;
 using FlowForge.WebApi.Middleware;
 using FlowForge.WebApi.Options;
@@ -124,9 +127,24 @@ builder.Services.AddSignalR();
 builder.Services.Configure<OutboxRelayOptions>(
     builder.Configuration.GetSection(OutboxRelayOptions.SectionName));
 
-// Add Background Workers
-builder.Services.AddHostedService<AutomationTriggeredConsumer>();
-builder.Services.AddHostedService<JobStatusChangedConsumer>();
+// Add Background Workers & Event Handlers
+var messagingProvider = builder.Configuration
+    .GetSection("Messaging")?.GetValue<string>("Provider") ?? "redis";
+
+builder.Services.AddSingleton<AutomationTriggeredHandler>();
+builder.Services.AddSingleton<IEventHandler<FlowForge.Contracts.Events.AutomationTriggeredEvent>>(sp =>
+    sp.GetRequiredService<AutomationTriggeredHandler>());
+builder.Services.AddSingleton<JobStatusChangedHandler>();
+builder.Services.AddSingleton<IEventHandler<FlowForge.Contracts.Events.JobStatusChangedEvent>>(sp =>
+    sp.GetRequiredService<JobStatusChangedHandler>());
+
+if (messagingProvider == "redis")
+{
+    builder.Services.AddHostedService<AutomationTriggeredConsumer>();
+    builder.Services.AddHostedService<JobStatusChangedConsumer>();
+}
+
+// Outbox relay always runs (both modes need it)
 builder.Services.AddHostedService<OutboxRelayWorker>();
 
 // Add Rate Limiting
@@ -187,10 +205,19 @@ using (var scope = app.Services.CreateScope())
     await FlowForge.Infrastructure.Persistence.DatabaseInitializer.InitializeDatabasesAsync(scope.ServiceProvider);
 }
 
-// Bootstrap Redis consumer groups
-var bootstrapper = app.Services.GetRequiredService<IStreamBootstrapper>();
-await bootstrapper.EnsureAsync(StreamNames.AutomationTriggered, "webapi");
-await bootstrapper.EnsureAsync(StreamNames.JobStatusChanged, "webapi");
+// Bootstrap messaging infrastructure
+if (messagingProvider == "redis")
+{
+    var bootstrapper = app.Services.GetRequiredService<IStreamBootstrapper>();
+    await bootstrapper.EnsureAsync(StreamNames.AutomationTriggered, "webapi");
+    await bootstrapper.EnsureAsync(StreamNames.JobStatusChanged, "webapi");
+}
+else if (messagingProvider == "dapr")
+{
+    app.MapSubscribeHandler();
+    app.MapDaprSubscription<FlowForge.Contracts.Events.AutomationTriggeredEvent>(TopicNames.AutomationTriggered);
+    app.MapDaprSubscription<FlowForge.Contracts.Events.JobStatusChangedEvent>(TopicNames.JobStatusChanged);
+}
 
 // Middleware
 if (app.Environment.IsDevelopment())

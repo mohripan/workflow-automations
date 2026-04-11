@@ -8,6 +8,7 @@ using FlowForge.Infrastructure.Messaging.DeadLetter;
 using FlowForge.Infrastructure.Persistence.Platform;
 using FlowForge.Infrastructure.Repositories;
 using FlowForge.Integration.Tests.Infrastructure;
+using FlowForge.JobOrchestrator.Handlers;
 using FlowForge.JobOrchestrator.LoadBalancing;
 using FlowForge.JobOrchestrator.Workers;
 using FluentAssertions;
@@ -171,23 +172,20 @@ public class JobDispatcherWorkerTests : IAsyncLifetime
 
         var sp = services.BuildServiceProvider();
 
-        return new TestableDispatcher(
-            fakeConsumer,
+        var handler = new JobCreatedHandler(
             publisher,
             sp,
             new RoundRobinLoadBalancer(),
             Substitute.For<IDlqWriter>(),
-            NullLogger<JobDispatcherWorker>.Instance);
+            NullLogger<JobCreatedHandler>.Instance);
+
+        return new TestableDispatcher(fakeConsumer, handler);
     }
 
     private sealed class TestableDispatcher(
         IMessageConsumer consumer,
-        IMessagePublisher publisher,
-        IServiceProvider sp,
-        ILoadBalancer loadBalancer,
-        IDlqWriter dlqWriter,
-        Microsoft.Extensions.Logging.ILogger<JobDispatcherWorker> logger)
-        : JobDispatcherWorker(consumer, publisher, sp, loadBalancer, dlqWriter, logger)
+        JobCreatedHandler handler)
+        : JobDispatcherWorker(consumer, handler)
     {
         public Task RunAsync(CancellationToken ct) => ExecuteAsync(ct);
     }

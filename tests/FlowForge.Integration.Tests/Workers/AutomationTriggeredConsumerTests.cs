@@ -8,6 +8,7 @@ using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.Infrastructure.Persistence.Platform;
 using FlowForge.Infrastructure.Repositories;
 using FlowForge.Integration.Tests.Infrastructure;
+using FlowForge.WebApi.Handlers;
 using FlowForge.WebApi.Workers;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -223,15 +224,20 @@ public class AutomationTriggeredConsumerTests : IAsyncLifetime
         services.AddLogging();
 
         var sp = services.BuildServiceProvider();
-        return new TestableConsumer(fakeConsumer, sp, NullLogger<AutomationTriggeredConsumer>.Instance);
+
+        var handler = new AutomationTriggeredHandler(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            NSubstitute.Substitute.For<IDlqWriter>(),
+            NullLogger<AutomationTriggeredHandler>.Instance);
+
+        return new TestableConsumer(fakeConsumer, handler);
     }
 
     // Exposes the protected ExecuteAsync for testing
     private sealed class TestableConsumer(
         IMessageConsumer consumer,
-        IServiceProvider sp,
-        Microsoft.Extensions.Logging.ILogger<AutomationTriggeredConsumer> logger)
-        : AutomationTriggeredConsumer(consumer, sp.GetRequiredService<IServiceScopeFactory>(), NSubstitute.Substitute.For<IDlqWriter>(), logger)
+        AutomationTriggeredHandler handler)
+        : AutomationTriggeredConsumer(consumer, handler)
     {
         public Task RunAsync(CancellationToken ct) => ExecuteAsync(ct);
     }

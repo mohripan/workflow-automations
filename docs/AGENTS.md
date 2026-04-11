@@ -1,6 +1,6 @@
 # AGENTS.md — FlowForge Architecture Overview
 
-FlowForge is a .NET 10 workflow orchestration platform. It evaluates automation trigger conditions on a schedule, creates jobs when conditions are met, routes them to the appropriate worker hosts, executes them as isolated child processes, and reports outcomes back — all over Redis Streams.
+FlowForge is a .NET 10 workflow orchestration platform. It evaluates automation trigger conditions on a schedule, creates jobs when conditions are met, routes them to the appropriate worker hosts, executes them as isolated child processes, and reports outcomes back — all over a provider-agnostic messaging layer (Redis Streams or Dapr+Kafka).
 
 ---
 
@@ -44,7 +44,7 @@ FlowForge is a .NET 10 workflow orchestration platform. It evaluates automation 
 ASP.NET Core web application. Handles the REST API, SignalR real-time push, and three background workers:
 - **AutomationTriggeredConsumer** — creates jobs, prevents duplicates via `ActiveJobId` lock, passes retry context and `TaskConfig` snapshot
 - **JobStatusChangedConsumer** — updates job state, persists `OutputJson` on completion, clears the automation lock on terminal status, schedules retries via outbox when `RetryAttempt < MaxRetries`
-- **OutboxRelayWorker** — polls `OutboxMessages` every `OutboxRelayOptions.PollIntervalMs` ms and publishes to Redis Streams
+- **OutboxRelayWorker** — polls `OutboxMessages` every `OutboxRelayOptions.PollIntervalMs` ms and publishes via `IMessagePublisher` (works with both Redis Streams and Dapr+Kafka)
 
 Also hosts `DlqController` for operator inspection, replay, and deletion of dead-letter entries.
 Exposes task type discovery at `GET /api/task-types`.
@@ -109,9 +109,31 @@ A string identifier (`"send-email"`, `"http-request"`, `"run-script"`) that maps
 
 ## Communication Patterns
 
-All inter-service communication uses **Redis Streams** with consumer groups.
+### Messaging Layer
 
-| Stream | Publisher | Consumer(s) |
+All inter-service communication uses a **provider-agnostic messaging layer**. Two providers are supported:
+
+| Provider | Selection | Transport | How consumers receive events |
+|---|---|---|---|
+| **Redis Streams** (default) | `Messaging:Provider = "redis"` | Redis Streams with consumer groups | `BackgroundService` workers pull from streams (existing behavior) |
+| **Dapr+Kafka** | `Messaging:Provider = "dapr"` | Kafka via Dapr pub/sub component | Dapr sidecars push to HTTP subscription endpoints (`/dapr/{topicName}`) |
+
+Provider selection is configuration-driven via `Messaging:Provider` in `appsettings.json`.
+
+**Key abstractions** (in `FlowForge.Infrastructure`):
+
+| Abstraction | Role |
+|---|---|
+| `IMessagePublisher` | Publish events to the configured transport |
+| `IEventHandler<TEvent>` | Business logic for handling a specific event type (transport-independent) |
+| `IMessagingInfrastructure` | Registers consumers/subscriptions at startup for the active provider |
+| `IDlqReader` / `IDlqWriter` | Dead-letter queue access — works identically in both modes |
+
+Business logic lives in `IEventHandler<TEvent>` implementations, which are completely independent of the underlying transport. Workers (Redis mode) and subscription endpoints (Dapr mode) are thin shells that delegate to the same handlers.
+
+### Topics
+
+| Topic | Publisher | Consumer(s) |
 |---|---|---|
 | `flowforge:automation-triggered` | JobAutomator / WebApi (retry outbox) | WebApi `AutomationTriggeredConsumer` |
 | `flowforge:automation-changed` | WebApi (outbox) | JobAutomator `AutomationCacheSyncWorker` |
@@ -121,9 +143,19 @@ All inter-service communication uses **Redis Streams** with consumer groups.
 | `flowforge:job-cancel-requested` | WebApi | WorkflowHost `CancelConsumerWorker` |
 | `flowforge:dlq` | All consumers (on error) | `DlqController` (operator) |
 
-The host stream key uses the host's **name** (matching `NODE_NAME` env var), not its database GUID.
+The host topic key uses the host's **name** (matching `NODE_NAME` env var), not its database GUID. Topic names are defined in the `TopicNames` constants class.
 
-The **Transactional Outbox** pattern is used for all writes that must be atomic with a database mutation. `IOutboxWriter` appends to `OutboxMessages` in the same `SaveChangesAsync` call; `OutboxRelayWorker` polls and publishes to Redis.
+### Transactional Outbox
+
+The **Transactional Outbox** pattern is used for all writes that must be atomic with a database mutation. `IOutboxWriter` appends to `OutboxMessages` in the same `SaveChangesAsync` call; `OutboxRelayWorker` polls and publishes via `IMessagePublisher` (which routes to the active provider).
+
+### Dapr Infrastructure
+
+When running with Dapr, use the extended compose file:
+```bash
+docker compose -f deploy/docker/compose.yaml -f deploy/docker/compose.dapr.yaml up -d
+```
+This adds Kafka (KRaft mode, no ZooKeeper) and Dapr sidecars for each service. Dapr pub/sub is configured to use Kafka as the backing broker.
 
 ---
 
@@ -144,7 +176,7 @@ The **Transactional Outbox** pattern is used for all writes that must be atomic 
 
 ## Observability
 
-- **Distributed Tracing** — OpenTelemetry + OTLP exporter (Jaeger in dev). Trace context propagated across Redis Streams via `traceparent` field on every message.
+- **Distributed Tracing** — OpenTelemetry + OTLP exporter (Jaeger in dev). Trace context propagated across messaging via `traceparent` field on every message (both Redis Streams and Dapr).
 - **Metrics** — `FlowForgeMetrics` static `Meter` (`"FlowForge"`):
   - `flowforge.jobs.created` (counter, tag: `automation_id`, `host_group_id`)
   - `flowforge.jobs.completed` (counter, tag: `host_group_id`)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**FlowForge** is a distributed workflow orchestration system built on .NET 10. It consists of five cooperating services communicating exclusively via Redis Streams.
+**FlowForge** is a distributed workflow orchestration system built on .NET 10. It consists of five cooperating services communicating via a provider-agnostic messaging layer (Redis Streams or Dapr+Kafka).
 
 ## Common Commands
 
@@ -39,8 +39,13 @@ dotnet watch test --project tests/FlowForge.Domain.Tests
 
 ### Start Local Infrastructure
 ```bash
+# Redis mode (default)
 cd deploy/docker
 docker compose up -d
+
+# Dapr + Kafka mode
+cd deploy/docker
+docker compose -f compose.yaml -f compose.dapr.yaml up -d --build
 ```
 
 ### Run Services Locally
@@ -82,13 +87,24 @@ REST/SignalR clients
 - `FlowForge.Infrastructure` → Domain + Contracts only
 - Service projects (WebApi, JobAutomator, etc.) → shared projects only, **never each other**
 
-### Communication: Transactional Outbox + Redis Streams
-All cross-service messaging goes through an outbox pattern:
-1. Write event to `OutboxMessage` table **in the same transaction** as the domain entity change
-2. `OutboxRelayWorker` polls every 500ms and publishes to Redis Streams
-3. Consumers always `XACK` in a `finally` block; failures go to `flowforge:dlq`
+### Communication: Provider-Agnostic Messaging
+The messaging layer supports two providers, selected via `Messaging:Provider` config:
 
-Key streams: `flowforge:automation-triggered`, `flowforge:automation-changed`, `flowforge:job-created`, `flowforge:host:{hostName}`, `flowforge:job-status-changed`, `flowforge:job-cancel-requested`, `flowforge:dlq`
+**Redis mode** (default, `"redis"`):
+1. Write event to `OutboxMessage` table in the same transaction as the domain entity change
+2. `OutboxRelayWorker` polls and publishes via `IMessagePublisher` → Redis Streams
+3. `BackgroundService` workers pull from streams via `IMessageConsumer`
+
+**Dapr mode** (`"dapr"`):
+1. Same outbox pattern — `OutboxRelayWorker` publishes via `IMessagePublisher` → Dapr pub/sub → Kafka
+2. Dapr sidecars push events to HTTP subscription endpoints (`/dapr/{topicName}`)
+3. `IEventHandler<TEvent>` classes contain all business logic, shared by both modes
+
+Key topics: `automation-triggered`, `automation-changed`, `job-created`, `host-{hostName}`, `job-status-changed`, `job-cancel-requested`, `dlq`
+
+Abstractions: `IMessagePublisher`, `IEventHandler<TEvent>`, `IMessagingInfrastructure`, `IDlqReader`, `IDlqWriter`
+
+Docker: `compose.yaml` (Redis mode) or `compose.yaml` + `compose.dapr.yaml` (Dapr+Kafka mode)
 
 ### Trigger System
 Triggers use a string `TypeId` and a `ConfigJson` blob. Each type implements `ITriggerTypeDescriptor` (declares schema + sensitive fields) and an `ITriggerEvaluator`. Built-in types: `schedule`, `sql`, `webhook`, `job-completed`, `custom-script`.

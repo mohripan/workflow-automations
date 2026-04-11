@@ -1,7 +1,9 @@
 using FlowForge.Infrastructure.Audit;
 using FlowForge.Infrastructure.Auth;
 using Microsoft.AspNetCore.Authentication;
+using FlowForge.Infrastructure.Messaging;
 using FlowForge.Infrastructure.Messaging.Redis;
+using FlowForge.Infrastructure.Messaging.Dapr;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.DeadLetter;
 using FlowForge.Infrastructure.Messaging.Outbox;
@@ -30,7 +32,8 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration config, string? serviceName = null)
     {
-        services.AddRedis();
+        services.AddRedisCaching(config);
+        services.AddMessaging(config);
         services.AddPersistence(config);
         services.AddTriggerTypeRegistry();
         services.AddTaskTypeRegistry();
@@ -46,22 +49,78 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    public static IServiceCollection AddRedis(this IServiceCollection services)
+    /// <summary>
+    /// Registers the messaging provider based on <c>Messaging:Provider</c> config.
+    /// Supported providers: "redis" (default), "dapr".
+    /// </summary>
+    public static IServiceCollection AddMessaging(this IServiceCollection services, IConfiguration config)
     {
-        // Register lazily so the connection string is resolved from IConfiguration
-        // at first use — this allows test hosts to override "Redis:ConnectionString"
-        // via ConfigureAppConfiguration before the multiplexer is created.
+        services.Configure<MessagingOptions>(config.GetSection(MessagingOptions.SectionName));
+
+        var provider = config.GetSection(MessagingOptions.SectionName)
+            .GetValue<string>("Provider") ?? "redis";
+
+        return provider.ToLowerInvariant() switch
+        {
+            "dapr" => services.AddDaprMessaging(config),
+            _ => services.AddRedisMessaging(),
+        };
+    }
+
+    /// <summary>
+    /// Registers Redis-based messaging (publisher, consumer, DLQ, bootstrapper).
+    /// Redis connection is registered by <see cref="AddRedisCaching"/> and shared.
+    /// </summary>
+    public static IServiceCollection AddRedisMessaging(this IServiceCollection services)
+    {
+        services.AddSingleton<IMessagePublisher, RedisStreamPublisher>();
+        services.AddSingleton<IMessageConsumer, RedisStreamConsumer>();
+        services.AddSingleton<IStreamBootstrapper, RedisStreamBootstrapper>();
+        services.AddSingleton<IMessagingInfrastructure, RedisMessagingInfrastructure>();
+        services.AddSingleton<IDlqWriter, DlqWriter>();
+        services.AddSingleton<IDlqReader, RedisDlqReader>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registers Redis caching (<see cref="IRedisService"/>) and the underlying
+    /// <see cref="IConnectionMultiplexer"/>. This is always registered regardless
+    /// of the messaging provider — Redis is used for caching in both modes.
+    /// </summary>
+    public static IServiceCollection AddRedisCaching(this IServiceCollection services, IConfiguration config)
+    {
+        // Only register once — check if IConnectionMultiplexer is already registered
+        if (services.Any(d => d.ServiceType == typeof(IConnectionMultiplexer)))
+            return services;
+
         services.AddSingleton<IConnectionMultiplexer>(sp =>
         {
             var connStr = sp.GetRequiredService<IConfiguration>().GetSection("Redis:ConnectionString").Value
                 ?? throw new ArgumentNullException("Redis:ConnectionString");
             return ConnectionMultiplexer.Connect(connStr);
         });
-        services.AddSingleton<IMessagePublisher, RedisStreamPublisher>();
-        services.AddSingleton<IMessageConsumer, RedisStreamConsumer>();
-        services.AddSingleton<IStreamBootstrapper, RedisStreamBootstrapper>();
         services.AddSingleton<IRedisService, RedisService>();
-        services.AddSingleton<IDlqWriter, DlqWriter>();
+        return services;
+    }
+
+    /// <summary>
+    /// Legacy method that registers both Redis caching and Redis messaging.
+    /// Kept for backward compatibility.
+    /// </summary>
+    public static IServiceCollection AddRedis(this IServiceCollection services)
+    {
+        // Register Redis connection + caching
+        services.AddSingleton<IConnectionMultiplexer>(sp =>
+        {
+            var connStr = sp.GetRequiredService<IConfiguration>().GetSection("Redis:ConnectionString").Value
+                ?? throw new ArgumentNullException("Redis:ConnectionString");
+            return ConnectionMultiplexer.Connect(connStr);
+        });
+        services.AddSingleton<IRedisService, RedisService>();
+
+        // Register Redis messaging
+        services.AddRedisMessaging();
+
         return services;
     }
 

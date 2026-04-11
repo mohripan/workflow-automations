@@ -1,13 +1,13 @@
 using FlowForge.Contracts.Events;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.Redis;
+using FlowForge.WorkflowHost.Handlers;
 
 namespace FlowForge.WorkflowHost.Workers;
 
 public class CancelConsumerWorker(
     IMessageConsumer consumer,
-    JobConsumerWorker jobConsumer,
-    ILogger<CancelConsumerWorker> logger) : BackgroundService
+    JobCancelRequestedHandler handler) : BackgroundService
 {
     private readonly string _hostId = Environment.GetEnvironmentVariable("NODE_NAME") ?? Environment.MachineName;
 
@@ -17,17 +17,7 @@ public class CancelConsumerWorker(
         await foreach (var @event in consumer.ConsumeAsync<JobCancelRequestedEvent>(
             StreamNames.JobCancelRequested, "workflow-host", _hostId, stoppingToken))
         {
-            if (@event.HostId.ToString() == _hostId || @event.HostId == Guid.Empty)
-            {
-                if (jobConsumer.TryCancel(@event.JobId))
-                {
-                    logger.LogInformation("Successfully cancelled job {JobId}", @event.JobId);
-                }
-                else
-                {
-                    logger.LogDebug("Received cancel request for job {JobId} but it's not active on this host", @event.JobId);
-                }
-            }
+            await handler.HandleAsync(@event, stoppingToken);
         }
     }
 }

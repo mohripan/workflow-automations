@@ -1,8 +1,7 @@
 using FlowForge.Contracts.Events;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.Redis;
-using FlowForge.JobAutomator.Cache;
-using FlowForge.JobAutomator.Initialization;
+using FlowForge.JobAutomator.Handlers;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -10,8 +9,7 @@ namespace FlowForge.JobAutomator.Workers;
 
 public class AutomationCacheSyncWorker(
     IMessageConsumer consumer,
-    AutomationCache cache,
-    IQuartzScheduleSync scheduleSync,
+    AutomationChangedHandler handler,
     ILogger<AutomationCacheSyncWorker> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -21,32 +19,7 @@ public class AutomationCacheSyncWorker(
         await foreach (var @event in consumer.ConsumeAsync<AutomationChangedEvent>(
             StreamNames.AutomationChanged, "job-automator", "automator-cache-sync", stoppingToken))
         {
-            try
-            {
-                switch (@event.ChangeType)
-                {
-                    case ChangeType.Created:
-                    case ChangeType.Updated:
-                        if (@event.Automation != null)
-                        {
-                            cache.Upsert(@event.Automation);
-                            await scheduleSync.SyncAsync(@event.Automation, stoppingToken);
-                            logger.LogInformation(
-                                "Cache updated for automation {AutomationId} ({ChangeType}, IsEnabled={IsEnabled})",
-                                @event.AutomationId, @event.ChangeType, @event.Automation.IsEnabled);
-                        }
-                        break;
-                    case ChangeType.Deleted:
-                        cache.Remove(@event.AutomationId);
-                        await scheduleSync.RemoveAllAsync(@event.AutomationId, stoppingToken);
-                        logger.LogInformation("Automation {AutomationId} removed from cache", @event.AutomationId);
-                        break;
-                }
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(ex, "Error processing automation changed event for {AutomationId}", @event.AutomationId);
-            }
+            await handler.HandleAsync(@event, stoppingToken);
         }
     }
 }

@@ -1,6 +1,9 @@
 using FlowForge.Infrastructure;
+using FlowForge.Infrastructure.Messaging;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.Dapr;
 using FlowForge.Infrastructure.Messaging.Redis;
+using FlowForge.JobOrchestrator.Handlers;
 using FlowForge.JobOrchestrator.LoadBalancing;
 using FlowForge.JobOrchestrator.Options;
 using FlowForge.JobOrchestrator.Workers;
@@ -19,7 +22,18 @@ builder.Services.Configure<HeartbeatMonitorOptions>(
 builder.Services.Configure<PendingJobScannerOptions>(
     builder.Configuration.GetSection(PendingJobScannerOptions.SectionName));
 
-builder.Services.AddHostedService<JobDispatcherWorker>();
+var messagingProvider = builder.Configuration
+    .GetSection("Messaging")?.GetValue<string>("Provider") ?? "redis";
+
+builder.Services.AddSingleton<JobCreatedHandler>();
+builder.Services.AddSingleton<IEventHandler<FlowForge.Contracts.Events.JobCreatedEvent>>(sp =>
+    sp.GetRequiredService<JobCreatedHandler>());
+
+if (messagingProvider == "redis")
+{
+    builder.Services.AddHostedService<JobDispatcherWorker>();
+}
+
 builder.Services.AddHostedService<HeartbeatMonitorWorker>();
 builder.Services.AddHostedService<PendingJobScannerWorker>();
 
@@ -35,9 +49,17 @@ builder.Services.AddHealthChecks()
 
 var app = builder.Build();
 
-// Bootstrap Redis consumer groups
-var bootstrapper = app.Services.GetRequiredService<IStreamBootstrapper>();
-await bootstrapper.EnsureAsync(StreamNames.JobCreated, "job-orchestrator");
+// Bootstrap messaging infrastructure
+if (messagingProvider == "redis")
+{
+    var bootstrapper = app.Services.GetRequiredService<IStreamBootstrapper>();
+    await bootstrapper.EnsureAsync(StreamNames.JobCreated, "job-orchestrator");
+}
+else if (messagingProvider == "dapr")
+{
+    app.MapSubscribeHandler();
+    app.MapDaprSubscription<FlowForge.Contracts.Events.JobCreatedEvent>(TopicNames.JobCreated);
+}
 
 // Health endpoints
 // Liveness: always 200 — only checks the process is not hung

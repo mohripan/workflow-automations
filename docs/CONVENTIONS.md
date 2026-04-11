@@ -91,7 +91,7 @@ Use `IOutboxWriter` to publish Redis Stream messages atomically with a database 
 await outboxWriter.WriteAsync(new SomeEvent(...), stoppingToken);  // stages OutboxMessage row
 await someRepo.SaveAsync(entity, stoppingToken);  // commits entity + outbox row in one transaction
 ```
-`OutboxRelayWorker` (in WebApi) polls `OutboxMessages` where `SentAt IS NULL` and publishes to Redis.
+`OutboxRelayWorker` (in WebApi) polls `OutboxMessages` where `SentAt IS NULL` and publishes via `IMessagePublisher` (routes to the active messaging provider).
 
 ### Dead Letter Queue (DLQ)
 All `BackgroundService` consumers that process Redis Stream events must inject `IDlqWriter` and follow this pattern:
@@ -119,6 +119,15 @@ DLQ entries are inspectable via `GET /api/dlq`, replayable via `POST /api/dlq/{i
 
 ### Stream Names
 All stream name strings must come from the `StreamNames` static class. Never inline string literals for streams.
+
+### Messaging Layer
+
+- **Provider-agnostic**: Business logic must use `IEventHandler<TEvent>`, never transport-specific types (e.g. `IMessageConsumer`, Dapr HTTP context). Workers and subscription endpoints are thin shells that delegate to handlers.
+- **Topic names**: Use `TopicNames` constants, never `StreamNames` directly (except in Redis provider code). `TopicNames` is the transport-neutral equivalent.
+- **Handler pattern**: Extract all event handling logic into `IEventHandler<TEvent>` implementations, keeping workers as thin shells that only deserialize and delegate.
+- **DLQ contract**: `IDlqWriter.WriteAsync()` must never throw — losing a DLQ entry is better than crashing a consumer. This invariant applies regardless of the active messaging provider.
+- **Provider switching**: Configuration-driven via `Messaging:Provider` in `appsettings.json` (`"redis"` | `"dapr"`). Code must never branch on provider outside of the provider implementations themselves.
+- **Registration**: Register handlers as both concrete type and `IEventHandler<TEvent>` interface in DI so that both the Redis `BackgroundService` workers and Dapr subscription endpoints can resolve them.
 
 ### IOptions for Configurable Settings
 Worker timing constants must never be hardcoded. Use strongly-typed options classes:

@@ -1,11 +1,14 @@
 using FlowForge.Infrastructure;
 using FlowForge.Infrastructure.Auth;
+using FlowForge.Infrastructure.Messaging;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.Dapr;
 using FlowForge.Infrastructure.Messaging.Redis;
 using FlowForge.Infrastructure.Telemetry;
 using FlowForge.JobAutomator.Cache;
 using FlowForge.JobAutomator.Clients;
 using FlowForge.JobAutomator.Evaluators;
+using FlowForge.JobAutomator.Handlers;
 using FlowForge.JobAutomator.Initialization;
 using FlowForge.JobAutomator.Options;
 using FlowForge.JobAutomator.Workers;
@@ -17,8 +20,9 @@ using Quartz.Impl.AdoJobStore;
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls("http://+:8080");
 
-// Shared Infrastructure (Redis, etc.)
-builder.Services.AddRedis();
+// Shared Infrastructure (Redis caching + messaging provider)
+builder.Services.AddRedisCaching(builder.Configuration);
+builder.Services.AddMessaging(builder.Configuration);
 builder.Services.AddEncryption();
 builder.Services.AddFlowForgeTelemetry(builder.Configuration, "JobAutomator");
 
@@ -76,9 +80,23 @@ builder.Services.AddSingleton<ITriggerEvaluator, WebhookTriggerEvaluator>();
 builder.Services.AddSingleton<ITriggerEvaluator, CustomScriptTriggerEvaluator>();
 
 // Workers
+var messagingProvider = builder.Configuration
+    .GetSection("Messaging")?.GetValue<string>("Provider") ?? "redis";
+
+builder.Services.AddSingleton<AutomationChangedHandler>();
+builder.Services.AddSingleton<IEventHandler<FlowForge.Contracts.Events.AutomationChangedEvent>>(sp =>
+    sp.GetRequiredService<AutomationChangedHandler>());
+builder.Services.AddSingleton<JobStatusChangedFlagHandler>();
+builder.Services.AddSingleton<IEventHandler<FlowForge.Contracts.Events.JobStatusChangedEvent>>(sp =>
+    sp.GetRequiredService<JobStatusChangedFlagHandler>());
 builder.Services.AddHostedService<AutomationCacheInitializer>();
-builder.Services.AddHostedService<AutomationCacheSyncWorker>();
-builder.Services.AddHostedService<JobCompletedFlagWorker>();
+
+if (messagingProvider == "redis")
+{
+    builder.Services.AddHostedService<AutomationCacheSyncWorker>();
+    builder.Services.AddHostedService<JobCompletedFlagWorker>();
+}
+
 builder.Services.AddHostedService<AutomationWorker>();
 
 // Health Checks
@@ -90,10 +108,19 @@ builder.Services.AddHealthChecks()
 
 var app = builder.Build();
 
-// Bootstrap Redis consumer groups
-var bootstrapper = app.Services.GetRequiredService<IStreamBootstrapper>();
-await bootstrapper.EnsureAsync(StreamNames.AutomationChanged, "job-automator");
-await bootstrapper.EnsureAsync(StreamNames.JobStatusChanged, "job-automator-flags");
+// Bootstrap messaging infrastructure
+if (messagingProvider == "redis")
+{
+    var bootstrapper = app.Services.GetRequiredService<IStreamBootstrapper>();
+    await bootstrapper.EnsureAsync(StreamNames.AutomationChanged, "job-automator");
+    await bootstrapper.EnsureAsync(StreamNames.JobStatusChanged, "job-automator-flags");
+}
+else if (messagingProvider == "dapr")
+{
+    app.MapSubscribeHandler();
+    app.MapDaprSubscription<FlowForge.Contracts.Events.AutomationChangedEvent>(TopicNames.AutomationChanged);
+    app.MapDaprSubscription<FlowForge.Contracts.Events.JobStatusChangedEvent>(TopicNames.JobStatusChanged);
+}
 
 // Health endpoints
 // Liveness: always 200 — only checks the process is not hung

@@ -799,3 +799,109 @@ The items have the following hard dependencies:
 ```
 
 Items #1 → #2 → #3 form the critical path. Everything else branches from there.
+
+---
+
+## Phase 2: Messaging Abstraction & Dapr/Kafka Migration
+
+This tracks the refactoring from direct Redis Streams to a provider-agnostic messaging layer using Dapr sidecars and Apache Kafka.
+
+| # | Title | Area | Status |
+|---|---|---|---|
+| 11 | [Generic Messaging Abstractions](#11-generic-messaging-abstractions) | Architecture | `[x]` |
+| 12 | [Event Handler Extraction](#12-event-handler-extraction) | Architecture | `[x]` |
+| 13 | [Outbox Relay Generalization](#13-outbox-relay-generalization) | Messaging | `[x]` |
+| 14 | [Dapr Provider Implementation](#14-dapr-provider-implementation) | Messaging | `[x]` |
+| 15 | [Provider Registration & Switching](#15-provider-registration--switching) | DI/Config | `[x]` |
+| 16 | [Service Program.cs Updates](#16-service-programcs-updates) | Services | `[x]` |
+| 17 | [Docker & Kafka Infrastructure](#17-docker--kafka-infrastructure) | Infrastructure | `[x]` |
+| 18 | [Per-Host Routing with Dapr](#18-per-host-routing-with-dapr) | Messaging | `[x]` |
+| 19 | [DLQ Controller Dual-Provider](#19-dlq-controller-dual-provider) | Messaging | `[x]` |
+| 20 | [Testing (All Tests Green)](#20-testing-all-tests-green) | Testing | `[x]` |
+| 21 | [Documentation](#21-documentation) | Documentation | `[x]` |
+
+---
+
+### 11. Generic Messaging Abstractions
+
+Created the provider-agnostic messaging surface area: `TopicNames.cs` centralises all stream/topic name constants, `IEventHandler<TEvent>` defines a uniform contract for processing inbound events, `IMessagingInfrastructure` abstracts consumer lifecycle management, and `MessagingOptions` exposes the `Messaging:Provider` configuration key. These abstractions live in the shared Infrastructure layer so every service can depend on them without coupling to a specific transport.
+
+---
+
+### 12. Event Handler Extraction
+
+Extracted 7 event handlers that were previously embedded inside `BackgroundService` workers into standalone `IEventHandler<T>` classes. Each handler is a focused, testable unit that receives a strongly-typed event and returns a `Task`. This decoupled business logic from transport concerns, enabling the same handlers to be invoked by either the Redis consumer loop or the Dapr subscription endpoints.
+
+---
+
+### 13. Outbox Relay Generalization
+
+Changed `OutboxRelayWorker` from directly calling `IConnectionMultiplexer` (Redis) to publishing through the `IMessagePublisher` abstraction. The relay still polls the `OutboxMessage` table on its 500 ms interval, but the actual publish call is now delegated to whichever provider is registered at startup. This was the single most impactful change for transport independence.
+
+---
+
+### 14. Dapr Provider Implementation
+
+Added the `Dapr.AspNetCore` NuGet package and implemented three new types: `DaprMessagePublisher` (publishes events via the Dapr pub/sub building block), `DaprDlqWriter` (routes failed messages to the DLQ topic through Dapr), and `DaprSubscriptionEndpoints` (registers programmatic Dapr subscription routes that map topics to the extracted `IEventHandler<T>` classes). Together these form the complete Dapr provider.
+
+---
+
+### 15. Provider Registration & Switching
+
+Split the former `AddRedis()` extension method into two independent methods: `AddRedisCaching()` (retains Redis as the distributed cache) and `AddMessaging()` (registers the messaging provider). The `AddMessaging()` method reads `Messaging:Provider` from configuration and registers either the Redis Streams or Dapr implementation. Switching providers requires only a config change — no code modifications.
+
+---
+
+### 16. Service Program.cs Updates
+
+Updated all four service `Program.cs` files (WebApi, JobAutomator, JobOrchestrator, WorkflowHost) with conditional worker and endpoint registration. When the Dapr provider is selected, `BackgroundService` consumer workers are not registered and Dapr subscription endpoints are mapped instead. When Redis is selected, the original workers run as before. This keeps both paths exercised and deployable.
+
+---
+
+### 17. Docker & Kafka Infrastructure
+
+Created a `compose.dapr.yaml` docker-compose override that adds Apache Kafka in KRaft mode (no ZooKeeper), Dapr sidecars for each service, and the necessary Dapr component YAML files for pub/sub and state store configuration. Running `docker compose -f compose.yaml -f compose.dapr.yaml up` starts the full Dapr/Kafka stack alongside the existing PostgreSQL and Redis infrastructure.
+
+---
+
+### 18. Per-Host Routing with Dapr
+
+Ensured that per-host topics (e.g., `host-{hostName}`) work identically in both Redis Streams and Dapr/Kafka modes. In Redis the pattern maps to a dedicated stream key; in Dapr it maps to a Kafka topic with the same name. The `TopicNames.ForHost(hostName)` helper generates the correct topic name, and both providers route messages to the correct WorkflowHost instance transparently.
+
+---
+
+### 19. DLQ Controller Dual-Provider
+
+Introduced an `IDlqReader` abstraction and refactored `DlqController` to be fully provider-agnostic. The controller no longer references Redis commands directly — it reads dead-letter messages through `IDlqReader`, which has both a Redis Streams implementation (reading from `flowforge:dlq`) and a Dapr implementation (reading from the Kafka DLQ topic). Replay and purge operations go through the same abstraction.
+
+---
+
+### 20. Testing (All Tests Green)
+
+Verified all 235 tests pass across the three test projects: 124 domain unit tests, 68 integration tests (Testcontainers), and 43 security tests. The extracted event handlers are covered by the existing domain and integration suites. No test changes were required beyond updating DI registrations in test fixtures to use the new `AddMessaging()` extension.
+
+---
+
+### 21. Documentation
+
+Updated `ROADMAP.md` with this Phase 2 section, revised `AGENTS.md` to describe the dual-provider architecture, added messaging provider conventions to `CONVENTIONS.md`, and updated `CLAUDE.md` to reflect the new build and configuration options. All documentation now accurately describes both the Redis Streams fallback path and the primary Dapr/Kafka path.
+
+---
+
+## Phase 2 — Implementation Order
+
+The items have the following hard dependencies:
+
+```
+#11 (Abstractions)     ──► #12 (Handler Extraction)  ──► #13 (Outbox Relay)
+#11                    ──► #14 (Dapr Provider)
+#12 + #13 + #14        ──► #15 (Provider Registration)
+#15                    ──► #16 (Service Program.cs)
+#15                    ──► #17 (Docker & Kafka Infra)
+#16 + #17              ──► #18 (Per-Host Routing)
+#15                    ──► #19 (DLQ Dual-Provider)
+#16 + #17 + #18 + #19  ──► #20 (Testing)
+#20                    ──► #21 (Documentation)
+```
+
+Items #11 → #12 → #13 and #11 → #14 form two parallel critical paths that converge at #15.

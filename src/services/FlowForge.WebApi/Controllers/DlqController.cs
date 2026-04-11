@@ -1,8 +1,7 @@
 using FlowForge.Infrastructure.Audit;
-using FlowForge.Infrastructure.Messaging.Redis;
+using FlowForge.Infrastructure.Messaging.DeadLetter;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using StackExchange.Redis;
 
 namespace FlowForge.WebApi.Controllers;
 
@@ -19,23 +18,16 @@ public record DlqEntryResponse(
 [Route("api/dlq")]
 [Authorize(Policy = "AdminOnly")]
 public class DlqController(
-    IConnectionMultiplexer redis,
+    IDlqReader dlqReader,
     ILogger<DlqController> logger,
     IAuditLogger auditLogger) : ControllerBase
 {
-    private readonly IDatabase _db = redis.GetDatabase();
-
     [HttpGet]
     public async Task<IActionResult> GetEntries([FromQuery] int limit = 50)
     {
-        var entries = await _db.StreamRangeAsync(StreamNames.Dlq, "-", "+", count: limit);
+        var entries = await dlqReader.GetEntriesAsync(limit);
         var result = entries.Select(e => new DlqEntryResponse(
-            Id:           e.Id!,
-            SourceStream: (string?)e.Values.FirstOrDefault(v => v.Name == "sourceStream").Value ?? "",
-            MessageId:    (string?)e.Values.FirstOrDefault(v => v.Name == "messageId").Value ?? "",
-            Payload:      (string?)e.Values.FirstOrDefault(v => v.Name == "payload").Value ?? "",
-            Error:        (string?)e.Values.FirstOrDefault(v => v.Name == "error").Value ?? "",
-            FailedAt:     (string?)e.Values.FirstOrDefault(v => v.Name == "failedAt").Value ?? ""
+            e.Id, e.SourceStream, e.MessageId, e.Payload, e.Error, e.FailedAt
         )).ToList();
         return Ok(result);
     }
@@ -43,8 +35,8 @@ public class DlqController(
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id)
     {
-        var deleted = await _db.StreamDeleteAsync(StreamNames.Dlq, [new RedisValue(id)]);
-        if (deleted == 0)
+        var deleted = await dlqReader.DeleteAsync(id);
+        if (!deleted)
             return NotFound();
 
         logger.LogInformation("DLQ entry {EntryId} deleted", id);
@@ -55,25 +47,19 @@ public class DlqController(
     [HttpPost("{id}/replay")]
     public async Task<IActionResult> Replay(string id)
     {
-        var entries = await _db.StreamRangeAsync(StreamNames.Dlq, id, id, count: 1);
-        if (entries.Length == 0)
+        var entry = await dlqReader.GetEntryAsync(id);
+        if (entry is null)
             return NotFound();
 
-        var entry = entries[0];
-        var sourceStream = (string?)entry.Values.FirstOrDefault(v => v.Name == "sourceStream").Value;
-        var payload      = (string?)entry.Values.FirstOrDefault(v => v.Name == "payload").Value;
-
-        if (string.IsNullOrEmpty(sourceStream) || string.IsNullOrEmpty(payload))
+        if (string.IsNullOrEmpty(entry.SourceStream) || string.IsNullOrEmpty(entry.Payload))
             return BadRequest("DLQ entry is missing sourceStream or payload.");
 
-        await _db.StreamAddAsync(sourceStream,
-        [
-            new NameValueEntry("payload",     payload),
-            new NameValueEntry("traceparent", string.Empty)
-        ]);
+        var replayed = await dlqReader.ReplayAsync(id);
+        if (!replayed)
+            return StatusCode(500, "Failed to replay DLQ entry.");
 
-        logger.LogInformation("DLQ entry {EntryId} replayed to stream {SourceStream}", id, sourceStream);
-        await auditLogger.LogAsync("dlq.replayed", id, new { sourceStream });
+        logger.LogInformation("DLQ entry {EntryId} replayed to {SourceStream}", id, entry.SourceStream);
+        await auditLogger.LogAsync("dlq.replayed", id, new { entry.SourceStream });
         return Accepted();
     }
 }

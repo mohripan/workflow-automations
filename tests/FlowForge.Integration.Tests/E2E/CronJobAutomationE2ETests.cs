@@ -15,9 +15,11 @@ using FlowForge.JobAutomator.Cache;
 using FlowForge.JobAutomator.Evaluators;
 using FlowForge.JobAutomator.Options;
 using FlowForge.JobAutomator.Workers;
+using FlowForge.JobOrchestrator.Handlers;
 using FlowForge.JobOrchestrator.LoadBalancing;
 using FlowForge.JobOrchestrator.Workers;
 using FlowForge.WebApi.DTOs.Responses;
+using FlowForge.WebApi.Handlers;
 using FlowForge.WebApi.Hubs;
 using FlowForge.WebApi.Options;
 using FlowForge.WebApi.Workers;
@@ -471,19 +473,25 @@ public class CronJobAutomationE2ETests : IAsyncLifetime
         services.AddLogging();
 
         var sp = services.BuildServiceProvider();
-        return new TestableTriggeredConsumer(
-            fakeConsumer, sp, NullLogger<AutomationTriggeredConsumer>.Instance);
+
+        var handler = new AutomationTriggeredHandler(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            Substitute.For<IDlqWriter>(),
+            NullLogger<AutomationTriggeredHandler>.Instance);
+
+        return new TestableTriggeredConsumer(fakeConsumer, handler);
     }
 
     private OutboxRelayWorker BuildOutboxRelayWorker()
     {
+        var publisher = new RedisStreamPublisher(_redis) as IMessagePublisher;
         var services = new ServiceCollection();
         services.AddSingleton(_platformDb);
         services.AddLogging();
         var sp = services.BuildServiceProvider();
 
         return new OutboxRelayWorker(
-            _redis,
+            publisher,
             sp.GetRequiredService<IServiceScopeFactory>(),
             Options.Create(new OutboxRelayOptions()),
             NullLogger<OutboxRelayWorker>.Instance);
@@ -503,11 +511,15 @@ public class CronJobAutomationE2ETests : IAsyncLifetime
         services.AddLogging();
 
         var sp = services.BuildServiceProvider();
-        return new TestableDispatcher(
-            fakeConsumer, publisher, sp,
+
+        var handler = new JobCreatedHandler(
+            publisher,
+            sp,
             new RoundRobinLoadBalancer(),
             Substitute.For<IDlqWriter>(),
-            NullLogger<JobDispatcherWorker>.Instance);
+            NullLogger<JobCreatedHandler>.Instance);
+
+        return new TestableDispatcher(fakeConsumer, handler);
     }
 
     private async Task RunStatusChangedConsumerAsync(
@@ -530,8 +542,14 @@ public class CronJobAutomationE2ETests : IAsyncLifetime
         services.AddLogging();
 
         var sp = services.BuildServiceProvider();
-        var consumer = new TestableStatusConsumer(
-            fakeConsumer, sp, hubContext, NullLogger<JobStatusChangedConsumer>.Instance);
+
+        var handler = new JobStatusChangedHandler(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            hubContext,
+            Substitute.For<IDlqWriter>(),
+            NullLogger<JobStatusChangedHandler>.Instance);
+
+        var consumer = new TestableStatusConsumer(fakeConsumer, handler);
 
         await consumer.RunAsync(CancellationToken.None);
     }
@@ -546,31 +564,22 @@ public class CronJobAutomationE2ETests : IAsyncLifetime
     // ── Testable BackgroundService wrappers ───────────────────────────────────
 
     private sealed class TestableTriggeredConsumer(
-        IMessageConsumer consumer, IServiceProvider sp,
-        Microsoft.Extensions.Logging.ILogger<AutomationTriggeredConsumer> logger)
-        : AutomationTriggeredConsumer(
-            consumer, sp.GetRequiredService<IServiceScopeFactory>(),
-            Substitute.For<IDlqWriter>(), logger)
+        IMessageConsumer consumer, AutomationTriggeredHandler handler)
+        : AutomationTriggeredConsumer(consumer, handler)
     {
         public Task RunAsync(CancellationToken ct) => ExecuteAsync(ct);
     }
 
     private sealed class TestableDispatcher(
-        IMessageConsumer consumer, IMessagePublisher publisher,
-        IServiceProvider sp, ILoadBalancer loadBalancer,
-        IDlqWriter dlqWriter, Microsoft.Extensions.Logging.ILogger<JobDispatcherWorker> logger)
-        : JobDispatcherWorker(consumer, publisher, sp, loadBalancer, dlqWriter, logger)
+        IMessageConsumer consumer, JobCreatedHandler handler)
+        : JobDispatcherWorker(consumer, handler)
     {
         public Task RunAsync(CancellationToken ct) => ExecuteAsync(ct);
     }
 
     private sealed class TestableStatusConsumer(
-        IMessageConsumer consumer, IServiceProvider sp,
-        IHubContext<JobStatusHub, IJobStatusClient> hubContext,
-        Microsoft.Extensions.Logging.ILogger<JobStatusChangedConsumer> logger)
-        : JobStatusChangedConsumer(
-            consumer, sp.GetRequiredService<IServiceScopeFactory>(),
-            hubContext, Substitute.For<IDlqWriter>(), logger)
+        IMessageConsumer consumer, JobStatusChangedHandler handler)
+        : JobStatusChangedConsumer(consumer, handler)
     {
         public Task RunAsync(CancellationToken ct) => ExecuteAsync(ct);
     }

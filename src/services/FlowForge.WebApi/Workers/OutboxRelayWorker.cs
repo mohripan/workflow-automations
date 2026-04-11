@@ -1,18 +1,17 @@
+using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Persistence.Platform;
 using FlowForge.WebApi.Options;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using StackExchange.Redis;
 
 namespace FlowForge.WebApi.Workers;
 
 public class OutboxRelayWorker(
-    IConnectionMultiplexer redis,
+    IMessagePublisher publisher,
     IServiceScopeFactory scopeFactory,
     IOptions<OutboxRelayOptions> options,
     ILogger<OutboxRelayWorker> logger) : BackgroundService
 {
-    private readonly IDatabase _redisDb = redis.GetDatabase();
     private readonly OutboxRelayOptions _options = options.Value;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -48,7 +47,7 @@ public class OutboxRelayWorker(
 
         foreach (var msg in messages)
         {
-            await _redisDb.StreamAddAsync(msg.StreamName, "payload", msg.Payload);
+            await publisher.PublishRawAsync(msg.StreamName, msg.Payload, ct);
             msg.MarkSent();
         }
 

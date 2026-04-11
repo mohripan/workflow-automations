@@ -1,8 +1,11 @@
 using FlowForge.Domain.Entities;
 using FlowForge.Domain.Repositories;
 using FlowForge.Infrastructure;
+using FlowForge.Infrastructure.Messaging;
 using FlowForge.Infrastructure.Messaging.Abstractions;
+using FlowForge.Infrastructure.Messaging.Dapr;
 using FlowForge.Infrastructure.Messaging.Redis;
+using FlowForge.WorkflowHost.Handlers;
 using FlowForge.WorkflowHost.Options;
 using FlowForge.WorkflowHost.ProcessManagement;
 using FlowForge.WorkflowHost.Workers;
@@ -19,10 +22,23 @@ builder.Services.AddSingleton<IProcessManager, NativeProcessManager>();
 builder.Services.Configure<HostHeartbeatOptions>(
     builder.Configuration.GetSection(HostHeartbeatOptions.SectionName));
 
-// Register JobConsumerWorker as singleton so CancelConsumerWorker can inject it directly
-builder.Services.AddSingleton<JobConsumerWorker>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<JobConsumerWorker>());
-builder.Services.AddHostedService<CancelConsumerWorker>();
+var messagingProvider = builder.Configuration
+    .GetSection("Messaging")?.GetValue<string>("Provider") ?? "redis";
+
+// Register JobAssignedHandler as singleton (holds _activeJobs dictionary shared with cancel handler)
+builder.Services.AddSingleton<JobAssignedHandler>();
+builder.Services.AddSingleton<IEventHandler<FlowForge.Contracts.Events.JobAssignedEvent>>(sp =>
+    sp.GetRequiredService<JobAssignedHandler>());
+builder.Services.AddSingleton<JobCancelRequestedHandler>();
+builder.Services.AddSingleton<IEventHandler<FlowForge.Contracts.Events.JobCancelRequestedEvent>>(sp =>
+    sp.GetRequiredService<JobCancelRequestedHandler>());
+
+if (messagingProvider == "redis")
+{
+    builder.Services.AddHostedService<JobConsumerWorker>();
+    builder.Services.AddHostedService<CancelConsumerWorker>();
+}
+
 builder.Services.AddHostedService<HostHeartbeatWorker>();
 
 // Health Checks
@@ -109,10 +125,20 @@ for (var attempt = 1; attempt <= maxRetries; attempt++)
     }
 }
 
-// Bootstrap Redis consumer groups
-var bootstrapper = app.Services.GetRequiredService<IStreamBootstrapper>();
-await bootstrapper.EnsureAsync(StreamNames.HostStream(hostId), "workflow-host");
-await bootstrapper.EnsureAsync(StreamNames.JobCancelRequested, "workflow-host");
+// Bootstrap messaging infrastructure
+if (messagingProvider == "redis")
+{
+    var bootstrapper = app.Services.GetRequiredService<IStreamBootstrapper>();
+    await bootstrapper.EnsureAsync(StreamNames.HostStream(hostId), "workflow-host");
+    await bootstrapper.EnsureAsync(StreamNames.JobCancelRequested, "workflow-host");
+}
+else if (messagingProvider == "dapr")
+{
+    app.MapSubscribeHandler();
+    // Per-host topic: Dapr/Kafka auto-creates the topic on first publish from orchestrator
+    app.MapDaprSubscription<FlowForge.Contracts.Events.JobAssignedEvent>(TopicNames.HostTopic(hostId));
+    app.MapDaprSubscription<FlowForge.Contracts.Events.JobCancelRequestedEvent>(TopicNames.JobCancelRequested);
+}
 
 // Health endpoints
 // Liveness: always 200 — only checks the process is not hung

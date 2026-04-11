@@ -3,6 +3,7 @@ using FlowForge.Domain.ValueObjects;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Integration.Tests.Infrastructure;
 using FlowForge.JobAutomator.Cache;
+using FlowForge.JobAutomator.Handlers;
 using FlowForge.JobAutomator.Initialization;
 using FlowForge.JobAutomator.Workers;
 using FluentAssertions;
@@ -138,11 +139,13 @@ public class AutomationCacheSyncWorkerTests
     private static async Task RunConsumerAsync(AutomationCache cache, params AutomationChangedEvent[] events)
     {
         var scheduleSync = Substitute.For<IQuartzScheduleSync>();
-        var consumer = new TestableConsumer(
-            new FakeMessageConsumer(events.Cast<object>().ToArray()),
+        var handler = new AutomationChangedHandler(
             cache,
             scheduleSync,
-            NullLogger<AutomationCacheSyncWorker>.Instance);
+            NullLogger<AutomationChangedHandler>.Instance);
+        var consumer = new TestableConsumer(
+            new FakeMessageConsumer(events.Cast<object>().ToArray()),
+            handler);
 
         await consumer.RunAsync(CancellationToken.None);
     }
@@ -163,11 +166,8 @@ public class AutomationCacheSyncWorkerTests
 
     private sealed class TestableConsumer(
         IMessageConsumer consumer,
-        AutomationCache cache,
-        IQuartzScheduleSync scheduleSync,
-        Microsoft.Extensions.Logging.ILogger<AutomationCacheSyncWorker> logger)
-        : AutomationCacheSyncWorker(consumer, cache, scheduleSync, logger)
+        AutomationChangedHandler handler)
+        : AutomationCacheSyncWorker(consumer, handler, NullLogger<AutomationCacheSyncWorker>.Instance)
     {
         public Task RunAsync(CancellationToken ct) => ExecuteAsync(ct);
-    }
-}
+    }}

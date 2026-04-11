@@ -5,10 +5,12 @@ using FlowForge.Domain.Repositories;
 using FlowForge.Domain.ValueObjects;
 using FlowForge.Infrastructure.Messaging.Abstractions;
 using FlowForge.Infrastructure.Messaging.DeadLetter;
+using FlowForge.Infrastructure.Messaging.Outbox;
 using FlowForge.Infrastructure.Persistence.Platform;
 using FlowForge.Infrastructure.Repositories;
 using FlowForge.Integration.Tests.Infrastructure;
 using FlowForge.WebApi.DTOs.Responses;
+using FlowForge.WebApi.Handlers;
 using FlowForge.WebApi.Hubs;
 using FlowForge.WebApi.Workers;
 using FluentAssertions;
@@ -196,6 +198,7 @@ public class JobStatusChangedConsumerTests : IAsyncLifetime
         var services = new ServiceCollection();
         services.AddSingleton(_platformDb);
         services.AddScoped<IAutomationRepository, AutomationRepository>();
+        services.AddScoped<IOutboxWriter, OutboxWriter>();
         services.AddKeyedSingleton<IJobRepository>(connectionId,
             (_, _) => new JobRepository(jobsDb));
         services.AddSingleton<IMessageConsumer>(fakeConsumer);
@@ -203,21 +206,21 @@ public class JobStatusChangedConsumerTests : IAsyncLifetime
 
         var sp = services.BuildServiceProvider();
 
-        var consumer = new TestableConsumer(
-            fakeConsumer,
-            sp,
+        var handler = new JobStatusChangedHandler(
+            sp.GetRequiredService<IServiceScopeFactory>(),
             hubContext,
-            NullLogger<JobStatusChangedConsumer>.Instance);
+            Substitute.For<IDlqWriter>(),
+            NullLogger<JobStatusChangedHandler>.Instance);
+
+        var consumer = new TestableConsumer(fakeConsumer, handler);
 
         await consumer.RunAsync(CancellationToken.None);
     }
 
     private sealed class TestableConsumer(
         IMessageConsumer consumer,
-        IServiceProvider sp,
-        IHubContext<JobStatusHub, IJobStatusClient> hubContext,
-        Microsoft.Extensions.Logging.ILogger<JobStatusChangedConsumer> logger)
-        : JobStatusChangedConsumer(consumer, sp.GetRequiredService<IServiceScopeFactory>(), hubContext, NSubstitute.Substitute.For<IDlqWriter>(), logger)
+        JobStatusChangedHandler handler)
+        : JobStatusChangedConsumer(consumer, handler)
     {
         public Task RunAsync(CancellationToken ct) => ExecuteAsync(ct);
     }
